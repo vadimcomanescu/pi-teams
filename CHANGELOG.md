@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.11.8] - 2026-03-21
+
+### Added
+- Prompt-template delegation bridge now supports parallel task execution: accepts `tasks` array payloads, emits per-task `parallelResults` with individual error/success states, and streams per-task progress updates with `taskProgress` entries.
+
 ## [0.11.7] - 2026-03-20
 
 ### Changed

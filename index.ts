@@ -142,8 +142,23 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const promptTemplateBridge = registerPromptTemplateDelegationBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
-		execute: async (requestId, request, signal, ctx, onUpdate) =>
-			executor.execute(
+		execute: async (requestId, request, signal, ctx, onUpdate) => {
+			if (request.tasks && request.tasks.length > 0) {
+				return executor.execute(
+					requestId,
+					{
+						tasks: request.tasks,
+						context: request.context,
+						cwd: request.cwd,
+						async: false,
+						clarify: false,
+					},
+					signal,
+					onUpdate,
+					ctx,
+				);
+			}
+			return executor.execute(
 				requestId,
 				{
 					agent: request.agent,
@@ -157,7 +172,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				signal,
 				onUpdate,
 				ctx,
-			),
+			);
+		},
 	});
 
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {

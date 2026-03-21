@@ -4,10 +4,24 @@ export const PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT = "prompt-template:subagent
 export const PROMPT_TEMPLATE_SUBAGENT_UPDATE_EVENT = "prompt-template:subagent:update";
 export const PROMPT_TEMPLATE_SUBAGENT_CANCEL_EVENT = "prompt-template:subagent:cancel";
 
+export interface PromptTemplateDelegationTask {
+	agent: string;
+	task: string;
+	model?: string;
+}
+
+export interface PromptTemplateDelegationParallelResult {
+	agent: string;
+	messages: unknown[];
+	isError: boolean;
+	errorText?: string;
+}
+
 export interface PromptTemplateDelegationRequest {
 	requestId: string;
 	agent: string;
 	task: string;
+	tasks?: PromptTemplateDelegationTask[];
 	context: "fresh" | "fork";
 	model: string;
 	cwd: string;
@@ -15,8 +29,21 @@ export interface PromptTemplateDelegationRequest {
 
 export interface PromptTemplateDelegationResponse extends PromptTemplateDelegationRequest {
 	messages: unknown[];
+	parallelResults?: PromptTemplateDelegationParallelResult[];
 	isError: boolean;
 	errorText?: string;
+}
+
+export interface PromptTemplateDelegationTaskProgress {
+	index?: number;
+	agent: string;
+	status?: string;
+	currentTool?: string;
+	currentToolArgs?: string;
+	recentOutput?: string;
+	toolCount?: number;
+	durationMs?: number;
+	tokens?: number;
 }
 
 export interface PromptTemplateDelegationUpdate {
@@ -27,6 +54,7 @@ export interface PromptTemplateDelegationUpdate {
 	toolCount?: number;
 	durationMs?: number;
 	tokens?: number;
+	taskProgress?: PromptTemplateDelegationTaskProgress[];
 }
 
 export interface PromptTemplateBridgeEvents {
@@ -39,13 +67,21 @@ interface PromptTemplateBridgeResult {
 	content?: unknown;
 	details?: {
 		results?: Array<{
+			agent?: string;
 			messages?: unknown[];
+			exitCode?: number;
+			error?: string;
 		}>;
 		progress?: Array<{
+			index?: number;
+			agent?: string;
+			status?: string;
 			currentTool?: string;
 			currentToolArgs?: string;
 			recentOutput?: string[];
 			toolCount?: number;
+			durationMs?: number;
+			tokens?: number;
 		}>;
 	};
 }
@@ -62,15 +98,45 @@ export interface PromptTemplateBridgeOptions<Ctx extends { cwd?: string }> {
 	) => Promise<PromptTemplateBridgeResult>;
 }
 
+function parseDelegationTasks(tasks: unknown): PromptTemplateDelegationTask[] {
+	if (!Array.isArray(tasks)) return [];
+	const parsed: PromptTemplateDelegationTask[] = [];
+	for (const item of tasks) {
+		if (!item || typeof item !== "object") return [];
+		const value = item as Partial<PromptTemplateDelegationTask>;
+		if (typeof value.agent !== "string" || !value.agent.trim()) return [];
+		if (typeof value.task !== "string" || !value.task.trim()) return [];
+		const model = typeof value.model === "string" && value.model.trim().length > 0 ? value.model : undefined;
+		parsed.push({
+			agent: value.agent,
+			task: value.task,
+			...(model ? { model } : {}),
+		});
+	}
+	return parsed;
+}
+
 export function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegationRequest | undefined {
 	if (!data || typeof data !== "object") return undefined;
-	const value = data as Partial<PromptTemplateDelegationRequest>;
-	if (!value.requestId || !value.agent || !value.task || !value.model || !value.cwd) return undefined;
+	const value = data as Partial<PromptTemplateDelegationRequest> & { tasks?: unknown };
+	if (typeof value.requestId !== "string" || !value.requestId) return undefined;
+	if (typeof value.model !== "string" || !value.model) return undefined;
+	if (typeof value.cwd !== "string" || !value.cwd) return undefined;
 	if (value.context !== "fresh" && value.context !== "fork") return undefined;
+	const tasks = parseDelegationTasks(value.tasks);
+	const hasSingle =
+		typeof value.agent === "string" &&
+		value.agent.length > 0 &&
+		typeof value.task === "string" &&
+		value.task.length > 0;
+	if (!hasSingle && tasks.length === 0) return undefined;
+
+	const fallbackTask = tasks[0];
 	return {
 		requestId: value.requestId,
-		agent: value.agent,
-		task: value.task,
+		agent: hasSingle ? value.agent : fallbackTask!.agent,
+		task: hasSingle ? value.task : fallbackTask!.task,
+		...(tasks.length > 0 ? { tasks } : {}),
 		context: value.context,
 		model: value.model,
 		cwd: value.cwd,
@@ -90,16 +156,31 @@ export function firstTextContent(content: unknown): string | undefined {
 
 function toDelegationUpdate(requestId: string, update: PromptTemplateBridgeResult): PromptTemplateDelegationUpdate | undefined {
 	const progress = update.details?.progress?.[0];
-	if (!progress) return undefined;
-	const lastOutput = progress.recentOutput?.[progress.recentOutput.length - 1];
+	const taskProgress = update.details?.progress?.map((entry) => {
+		const lastOutput = entry.recentOutput?.[entry.recentOutput.length - 1];
+		return {
+			index: entry.index,
+			agent: entry.agent ?? "delegate",
+			status: entry.status,
+			currentTool: entry.currentTool,
+			currentToolArgs: entry.currentToolArgs,
+			recentOutput: lastOutput && lastOutput !== "(running...)" ? lastOutput : undefined,
+			toolCount: entry.toolCount,
+			durationMs: entry.durationMs,
+			tokens: entry.tokens,
+		};
+	});
+	if (!progress && (!taskProgress || taskProgress.length === 0)) return undefined;
+	const lastOutput = progress?.recentOutput?.[progress.recentOutput.length - 1];
 	return {
 		requestId,
-		currentTool: progress.currentTool,
-		currentToolArgs: progress.currentToolArgs,
+		currentTool: progress?.currentTool,
+		currentToolArgs: progress?.currentToolArgs,
 		recentOutput: lastOutput && lastOutput !== "(running...)" ? lastOutput : undefined,
-		toolCount: progress.toolCount,
-		durationMs: (progress as { durationMs?: number }).durationMs,
-		tokens: (progress as { tokens?: number }).tokens,
+		toolCount: progress?.toolCount,
+		durationMs: progress?.durationMs,
+		tokens: progress?.tokens,
+		taskProgress,
 	};
 }
 
@@ -177,9 +258,31 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 				},
 			);
 			const messages = result.details?.results?.[0]?.messages ?? [];
+			const parallelResults = request.tasks
+				? request.tasks.map<PromptTemplateDelegationParallelResult>((task, index) => {
+					const step = result.details?.results?.[index];
+					if (!step) {
+						return {
+							agent: task.agent,
+							messages: [],
+							isError: true,
+							errorText: "Missing result for delegated parallel task.",
+						};
+					}
+					const exitCode = typeof step.exitCode === "number" ? step.exitCode : undefined;
+					const errorText = step.error;
+					return {
+						agent: step.agent ?? task.agent,
+						messages: step.messages ?? [],
+						isError: (exitCode !== undefined && exitCode !== 0) || !!errorText,
+						errorText: errorText || undefined,
+					};
+				})
+				: undefined;
 			const response: PromptTemplateDelegationResponse = {
 				...request,
 				messages,
+				...(parallelResults ? { parallelResults } : {}),
 				isError: result.isError === true,
 				errorText: result.isError ? firstTextContent(result.content) : undefined,
 			};
