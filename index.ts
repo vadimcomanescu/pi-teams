@@ -41,6 +41,7 @@ import {
 	SLASH_RESULT_TYPE,
 	WIDGET_KEY,
 } from "./types.js";
+import { AgentRegistry } from "./agent-registry.js";
 
 /**
  * Derive subagent session base directory from parent session file.
@@ -396,8 +397,34 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 	pi.registerTool(statusTool);
 	registerSlashCommands(pi, state);
 
-	pi.events.on("subagent:started", handleStarted);
-	pi.events.on("subagent:complete", handleComplete);
+	const registry = new AgentRegistry();
+
+	pi.events.on("subagent:started", (data: unknown) => {
+		handleStarted(data);
+		// Also register in agent registry if it has an id
+		const d = data as { id?: string; agent?: string; name?: string; task?: string };
+		if (d.id) {
+			try {
+				registry.register({
+					id: d.id,
+					name: d.name,
+					agentType: d.agent ?? "unknown",
+					task: d.task ?? "",
+					status: "running",
+					startTime: Date.now(),
+				});
+			} catch {
+				// Name collision or duplicate ID — non-fatal
+			}
+		}
+	});
+	pi.events.on("subagent:complete", (data: unknown) => {
+		handleComplete(data);
+		const d = data as { id?: string; success?: boolean; summary?: string };
+		if (d.id) {
+			registry.updateStatus(d.id, d.success ? "completed" : "failed", d.summary);
+		}
+	});
 
 	pi.on("tool_result", (event, ctx) => {
 		if (event.toolName !== "subagent") return;
@@ -433,12 +460,14 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		resetSessionState(ctx);
 	});
 	pi.on("session_switch", (_event, ctx) => {
+		registry.stopAll();
 		resetSessionState(ctx);
 	});
 	pi.on("session_branch", (_event, ctx) => {
 		resetSessionState(ctx);
 	});
 	pi.on("session_shutdown", () => {
+		registry.dispose();
 		stopResultWatcher();
 		if (state.poller) clearInterval(state.poller);
 		state.poller = null;

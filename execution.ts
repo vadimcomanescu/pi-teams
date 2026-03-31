@@ -55,8 +55,9 @@ export async function runSync(
 		};
 	}
 
+	const isRpc = options.spawnMode === "rpc";
 	const shareEnabled = options.share === true;
-	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
+	const sessionEnabled = isRpc ? false : (Boolean(options.sessionFile || options.sessionDir) || shareEnabled);
 	const effectiveModel = modelOverride ?? agent.model;
 	const modelArg = applyThinkingSuffix(effectiveModel, agent.thinking);
 
@@ -69,12 +70,17 @@ export async function runSync(
 		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${skillInjection}` : skillInjection;
 	}
 
+	const baseArgs = isRpc
+		? ["--mode", "rpc"]
+		: ["--mode", "json", "-p"];
+
 	const { args, env: sharedEnv, tempDir } = buildPiArgs({
-		baseArgs: ["--mode", "json", "-p"],
+		baseArgs,
 		task,
+		skipTaskArg: isRpc,
 		sessionEnabled,
-		sessionDir: options.sessionDir,
-		sessionFile: options.sessionFile,
+		sessionDir: isRpc ? undefined : options.sessionDir,
+		sessionFile: isRpc ? undefined : options.sessionFile,
 		model: effectiveModel,
 		thinking: agent.thinking,
 		tools: agent.tools,
@@ -128,13 +134,35 @@ export async function runSync(
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv() };
 
 	let closeJsonlWriter: (() => Promise<void>) | undefined;
+	let rpcProc: import("node:child_process").ChildProcess | undefined;
 	const exitCode = await new Promise<number>((resolve) => {
 		const spawnSpec = getPiSpawnCommand(args);
+		const stdio: import("node:child_process").StdioOptions = isRpc
+			? ["pipe", "pipe", "pipe"]
+			: ["ignore", "pipe", "pipe"];
 		const proc = spawn(spawnSpec.command, spawnSpec.args, {
 			cwd: cwd ?? runtimeCwd,
 			env: spawnEnv,
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio,
 		});
+
+		if (isRpc) {
+			rpcProc = proc;
+			// Prevent unhandled errors on broken pipe (worker crashes)
+			proc.stdin!.on("error", () => {});
+			// Send initial prompt via stdin
+			proc.stdin!.write(JSON.stringify({ type: "prompt", message: task }) + "\n");
+			// Let caller register the live handle (e.g., for agent registry)
+			options.onSpawn?.(proc);
+		}
+
+		// Track unexpected exits for registry cleanup (handled by caller via onSpawn)
+		proc.on("exit", (code) => {
+			if (isRpc && options.onExit) {
+				options.onExit(code ?? 1);
+			}
+		});
+
 		const jsonlWriter = createJsonlWriter(jsonlPath, proc.stdout);
 		closeJsonlWriter = () => jsonlWriter.close();
 		let buf = "";
@@ -344,9 +372,11 @@ export async function runSync(
 			?? (options.sessionDir ? findLatestSessionFile(options.sessionDir) : null);
 		if (sessionFile) {
 			result.sessionFile = sessionFile;
-			// HTML export disabled - module resolution issues with global pi installation
-			// Users can still access the session file directly
 		}
+	}
+
+	if (isRpc && rpcProc) {
+		result.rpcProc = rpcProc;
 	}
 
 	return result;

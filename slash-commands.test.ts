@@ -129,14 +129,13 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler("scout inspect this", createCommandContext());
 
-		assert.deepEqual(sent, [
-			{
-				customType: SLASH_RESULT_TYPE,
-				content: "Scout finished",
-				display: true,
-				details: { mode: "single", results: [] },
-			},
-		]);
+		// First message: initial progress (display: true)
+		// Second message: final result (display: false)
+		assert.equal(sent.length, 2, "should send initial + final messages");
+		const final = sent[1] as { customType: string; content: string; display: boolean };
+		assert.equal(final.customType, SLASH_RESULT_TYPE);
+		assert.equal(final.content, "Scout finished");
+		assert.equal(final.display, false);
 	});
 
 	it("/run still sends an inline slash result message when the bridge returns an error", async () => {
@@ -171,13 +170,12 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler("scout inspect this", createCommandContext());
 
-		assert.deepEqual(sent, [
-			{
-				customType: SLASH_RESULT_TYPE,
-				content: "Subagent failed",
-				display: true,
-				details: { mode: "single", results: [] },
-			},
-		]);
+		// First message: initial progress (display: true)
+		// Second message: final error result (display: false)
+		assert.equal(sent.length, 2, "should send initial + final messages");
+		const final = sent[1] as { customType: string; content: string; display: boolean };
+		assert.equal(final.customType, SLASH_RESULT_TYPE);
+		assert.equal(final.content, "Subagent failed");
+		assert.equal(final.display, false);
 	});
 });

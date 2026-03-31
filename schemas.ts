@@ -55,6 +55,7 @@ export const ChainItem = Type.Any({ description: "Chain step: either {agent, tas
 export const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode) or target for management get/update/delete" })),
 	task: Type.Optional(Type.String({ description: "Task (SINGLE mode)" })),
+	name: Type.Optional(Type.String({ description: "Name for the spawned agent. Makes it addressable via send_message while running." })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({
 		description: "Management action: 'list' (discover agents/chains), 'get' (full detail), 'create', 'update', 'delete'. Omit for execution mode."

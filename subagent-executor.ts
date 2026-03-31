@@ -55,6 +55,7 @@ export interface SubagentParamsLike {
 	action?: string;
 	agent?: string;
 	task?: string;
+	name?: string;
 	chain?: ChainStep[];
 	tasks?: TaskParam[];
 	context?: "fresh" | "fork";

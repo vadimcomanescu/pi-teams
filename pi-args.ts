@@ -8,6 +8,8 @@ const TASK_ARG_LIMIT = 8000;
 export interface BuildPiArgsInput {
 	baseArgs: string[];
 	task: string;
+	/** When true, task is NOT appended to args (sent via stdin for RPC mode) */
+	skipTaskArg?: boolean;
 	sessionEnabled: boolean;
 	sessionDir?: string;
 	sessionFile?: string;
@@ -96,15 +98,18 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		args.push("--append-system-prompt", promptPath);
 	}
 
-	if (input.task.length > TASK_ARG_LIMIT) {
-		if (!tempDir) {
-			tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+	// RPC mode: task goes via stdin, not CLI args
+	if (!input.skipTaskArg) {
+		if (input.task.length > TASK_ARG_LIMIT) {
+			if (!tempDir) {
+				tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+			}
+			const taskFilePath = path.join(tempDir, "task.md");
+			fs.writeFileSync(taskFilePath, `Task: ${input.task}`, { mode: 0o600 });
+			args.push(`@${taskFilePath}`);
+		} else {
+			args.push(`Task: ${input.task}`);
 		}
-		const taskFilePath = path.join(tempDir, "task.md");
-		fs.writeFileSync(taskFilePath, `Task: ${input.task}`, { mode: 0o600 });
-		args.push(`@${taskFilePath}`);
-	} else {
-		args.push(`Task: ${input.task}`);
 	}
 
 	const env: Record<string, string | undefined> = {};

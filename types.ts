@@ -97,10 +97,13 @@ export interface SingleResult {
 	progressSummary?: ProgressSummary;
 	artifactPaths?: ArtifactPaths;
 	truncation?: TruncationResult;
+	/** RPC mode: reference to the child process (for registry) */
+	rpcProc?: import("node:child_process").ChildProcess;
 }
 
 export interface Details {
 	mode: "single" | "parallel" | "chain" | "management";
+	name?: string;
 	context?: "fresh" | "fork";
 	results: SingleResult[];
 	asyncId?: string;
@@ -165,6 +168,7 @@ export interface AsyncStatus {
 export interface AsyncJobState {
 	asyncId: string;
 	asyncDir: string;
+	name?: string;
 	status: "queued" | "running" | "complete" | "failed";
 	mode?: "single" | "chain";
 	agents?: string[];
@@ -220,6 +224,12 @@ export interface ErrorInfo {
 export interface RunSyncOptions {
 	cwd?: string;
 	signal?: AbortSignal;
+	spawnMode?: "json" | "rpc";
+	/** Called immediately after spawn with the live process. For RPC mode,
+	 * allows registering the rpcHandle before blocking on completion. */
+	onSpawn?: (proc: import("node:child_process").ChildProcess) => void;
+	/** Called when the process exits (RPC mode). For registry status updates. */
+	onExit?: (exitCode: number) => void;
 	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
