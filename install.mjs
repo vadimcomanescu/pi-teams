@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * pi-subagents installer
+ * pi-teams installer
  * 
  * Usage:
- *   npx pi-subagents          # Install to ~/.pi/agent/extensions/subagent
- *   npx pi-subagents --remove # Remove the extension
+ *   npx pi-teams          # Install to ~/.pi/agent/extensions/subagent
+ *   npx pi-teams --remove # Remove the extension
  */
 
 import { execSync } from "node:child_process";
@@ -14,7 +14,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 
 const EXTENSION_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent");
-const REPO_URL = "https://github.com/nicobailon/pi-subagents.git";
+const REPO_URL = "https://github.com/vadimcomanescu/pi-teams.git";
 
 const args = process.argv.slice(2);
 const isRemove = args.includes("--remove") || args.includes("-r");
@@ -22,12 +22,12 @@ const isHelp = args.includes("--help") || args.includes("-h");
 
 if (isHelp) {
 	console.log(`
-pi-subagents - Pi extension for delegating tasks to subagents
+pi-teams - Pi extension for delegating tasks to subagents with coordinator mode
 
 Usage:
-  npx pi-subagents          Install the extension
-  npx pi-subagents --remove Remove the extension
-  npx pi-subagents --help   Show this help
+  npx pi-teams          Install the extension
+  npx pi-teams --remove Remove the extension
+  npx pi-teams --help   Show this help
 
 Installation directory: ${EXTENSION_DIR}
 `);
@@ -46,7 +46,7 @@ if (isRemove) {
 }
 
 // Install
-console.log("Installing pi-subagents...\n");
+console.log("Installing pi-teams...\n");
 
 // Ensure parent directory exists
 const parentDir = path.dirname(EXTENSION_DIR);
@@ -61,15 +61,15 @@ if (fs.existsSync(EXTENSION_DIR)) {
 		console.log("Updating existing installation...");
 		try {
 			execSync("git pull", { cwd: EXTENSION_DIR, stdio: "inherit" });
-			console.log("\n✓ pi-subagents updated");
+			console.log("\n✓ pi-teams updated");
 		} catch (err) {
 			console.error("Failed to update. Try removing and reinstalling:");
-			console.error("  npx pi-subagents --remove && npx pi-subagents");
+			console.error("  npx pi-teams --remove && npx pi-teams");
 			process.exit(1);
 		}
 	} else {
 		console.log(`Directory exists but is not a git repo: ${EXTENSION_DIR}`);
-		console.log("Remove it first with: npx pi-subagents --remove");
+		console.log("Remove it first with: npx pi-teams --remove");
 		process.exit(1);
 	}
 } else {
@@ -77,7 +77,7 @@ if (fs.existsSync(EXTENSION_DIR)) {
 	console.log(`Cloning to ${EXTENSION_DIR}...`);
 	try {
 		execSync(`git clone ${REPO_URL} "${EXTENSION_DIR}"`, { stdio: "inherit" });
-		console.log("\n✓ pi-subagents installed");
+		console.log("\n✓ pi-teams installed");
 	} catch (err) {
 		console.error("Failed to clone repository");
 		process.exit(1);
@@ -86,8 +86,10 @@ if (fs.existsSync(EXTENSION_DIR)) {
 
 console.log(`
 The extension is now available in pi. Tools added:
-  • subagent       - Delegate tasks to agents (single, chain, parallel)
+  • subagent        - Delegate tasks to agents (single, chain, parallel)
   • subagent_status - Check async run status
+  • send_message    - Send follow-up messages to running workers (coordinator mode)
+  • task_stop       - Stop running workers (coordinator mode)
 
 Documentation: ${EXTENSION_DIR}/README.md
 `);

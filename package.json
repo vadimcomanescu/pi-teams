@@ -1,17 +1,17 @@
 {
-  "name": "pi-subagents",
-  "version": "0.11.12",
-  "description": "Pi extension for delegating tasks to subagents with chains, parallel execution, and TUI clarification",
+  "name": "pi-teams",
+  "version": "0.12.0",
+  "description": "Pi extension for delegating tasks to subagents with chains, parallel execution, coordinator mode, and TUI clarification",
   "author": "Nico Bailon",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicobailon/pi-subagents.git"
+    "url": "git+https://github.com/vadimcomanescu/pi-teams.git"
   },
-  "homepage": "https://github.com/nicobailon/pi-subagents#readme",
+  "homepage": "https://github.com/vadimcomanescu/pi-teams#readme",
   "bugs": {
-    "url": "https://github.com/nicobailon/pi-subagents/issues"
+    "url": "https://github.com/vadimcomanescu/pi-teams/issues"
   },
   "keywords": [
     "pi-package",
@@ -23,7 +23,7 @@
     "cli"
   ],
   "bin": {
-    "pi-subagents": "install.mjs"
+    "pi-teams": "install.mjs"
   },
   "files": [
     "*.ts",

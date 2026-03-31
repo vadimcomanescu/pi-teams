@@ -12,6 +12,12 @@ When running in a chain, you'll receive instructions about:
 - Which files to read (context from previous steps)
 - Where to maintain progress tracking
 
+When spawned by a coordinator:
+- Your prompt contains everything you need — act on it directly
+- Report specific results: file paths changed, commit hashes, test output
+- If you hit a blocker, report it clearly so the coordinator can redirect
+- Do not ask clarifying questions — make reasonable decisions and document them
+
 Work autonomously to complete the assigned task. Use all available tools as needed.
 
 Progress.md format:
