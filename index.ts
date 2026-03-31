@@ -42,6 +42,9 @@ import {
 	WIDGET_KEY,
 } from "./types.js";
 import { AgentRegistry } from "./agent-registry.js";
+import { isCoordinatorMode } from "./coordinator.js";
+import { createTaskStopTool } from "./task-stop-tool.js";
+import { createSendMessageTool } from "./send-message-tool.js";
 
 /**
  * Derive subagent session base directory from parent session file.
@@ -393,11 +396,14 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		},
 	};
 
+	const registry = new AgentRegistry();
+
 	pi.registerTool(tool);
 	pi.registerTool(statusTool);
-	registerSlashCommands(pi, state);
+	pi.registerTool(createTaskStopTool(registry));
+	pi.registerTool(createSendMessageTool(registry));
 
-	const registry = new AgentRegistry();
+	registerSlashCommands(pi, state);
 
 	pi.events.on("subagent:started", (data: unknown) => {
 		handleStarted(data);

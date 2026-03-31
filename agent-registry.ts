@@ -138,21 +138,24 @@ export class AgentRegistry {
 	}
 
 	/**
-	 * Stop a single agent by ID. Sends abort to RPC agents, SIGTERM to others.
+	 * Send kill signals to a running agent. Does NOT update status —
+	 * the caller decides the final status (stopped, timed_out, etc.).
 	 */
-	stopAgent(id: string): void {
+	killAgent(id: string): void {
 		const agent = this.agents.get(id);
 		if (!agent || agent.status !== "running") return;
 
 		if (agent.rpcHandle) {
+			const proc = agent.rpcHandle.proc;
 			// RPC agent: send abort command first
 			try {
 				agent.rpcHandle.stdin.write(JSON.stringify({ type: "abort" }) + "\n");
 			} catch {
-				// stdin may already be closed
+				// stdin already closed — kill immediately
+				if (!proc.killed) proc.kill("SIGTERM");
+				return;
 			}
 			// Give 2s for graceful shutdown, then SIGTERM
-			const proc = agent.rpcHandle.proc;
 			setTimeout(() => {
 				if (!proc.killed) {
 					proc.kill("SIGTERM");
@@ -165,7 +168,13 @@ export class AgentRegistry {
 				// Process may have already exited
 			}
 		}
+	}
 
+	/**
+	 * Stop a single agent: kill + update status.
+	 */
+	stopAgent(id: string): void {
+		this.killAgent(id);
 		this.updateStatus(id, "stopped");
 	}
 
@@ -192,7 +201,7 @@ export class AgentRegistry {
 			const now = Date.now();
 			for (const agent of this.getRunning()) {
 				if (now - agent.startTime > timeoutMs) {
-					this.stopAgent(agent.id);
+					this.killAgent(agent.id);
 					this.updateStatus(agent.id, "timed_out");
 					this.onTimeout?.(agent);
 				}
