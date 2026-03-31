@@ -142,20 +142,6 @@ describe("RPC mode spawning", { skip: !available ? "pi packages not available" :
 		assert.equal(spawnCalled, false, "onSpawn should not fire in json mode");
 	});
 
-	it("onExit callback fires with exit code", async () => {
-		mockPi.onCall({ exitCode: 42 });
-		const agents = makeAgentConfigs(["worker"]);
-
-		let exitCode: number | undefined;
-
-		await runSync(tempDir, agents, "worker", "Task", {
-			spawnMode: "rpc",
-			onExit: (code: number) => { exitCode = code; },
-		});
-
-		assert.equal(exitCode, 42);
-	});
-
 	it("rpcProc is set on result in RPC mode", async () => {
 		mockPi.onCall({ output: "Done" });
 		const agents = makeAgentConfigs(["worker"]);

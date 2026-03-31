@@ -23,6 +23,8 @@ import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
 import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async-execution.js";
 import { createForkContextResolver } from "./fork-context.js";
 import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.js";
+import { isCoordinatorMode, getCoordinatorSettings } from "./coordinator.js";
+import type { AgentRegistry } from "./agent-registry.js";
 import { getFinalOutput, mapConcurrent } from "./utils.js";
 import {
 	type AgentProgress,
@@ -83,6 +85,7 @@ interface ExecutorDeps {
 	getSubagentSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
 	discoverAgents: (cwd: string, scope: AgentScope) => { agents: AgentConfig[] };
+	registry?: AgentRegistry;
 }
 
 interface ExecutionContextData {
@@ -244,6 +247,128 @@ function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["
 			task: wrapForkTask(sequential.task ?? (stepIndex === 0 ? "{task}" : "{previous}")),
 		};
 	});
+}
+
+// =============================================================================
+// Coordinator Worker Spawn (fire-and-forget RPC)
+// =============================================================================
+
+interface CoordinatorSpawnInput {
+	params: SubagentParamsLike;
+	agents: AgentConfig[];
+	ctx: ExtensionContext;
+	signal: AbortSignal;
+	runId: string;
+	task: string;
+	skillOverride: string[] | false | undefined;
+	artifactConfig: ArtifactConfig;
+	artifactsDir: string;
+	modelOverride: string | undefined;
+}
+
+function spawnCoordinatorWorker(
+	input: CoordinatorSpawnInput,
+	deps: ExecutorDeps,
+): AgentToolResult<Details> | null {
+	const { params, agents, ctx, signal, runId, task, skillOverride, artifactConfig, artifactsDir, modelOverride } = input;
+	const registry = deps.registry!;
+	const settings = getCoordinatorSettings();
+
+	// Enforce max concurrent workers
+	const running = registry.getRunning().length;
+	if (running >= settings.maxConcurrentWorkers) {
+		return {
+			content: [{ type: "text", text: `Max concurrent workers (${settings.maxConcurrentWorkers}) reached. ${running} workers running. Stop a worker with task_stop first.` }],
+			isError: true,
+			details: { mode: "single" as const, results: [] },
+		};
+	}
+
+	const workerId = runId;
+	const workerName = params.name;
+
+	// Validate name before spawning to avoid orphaned processes
+	if (workerName) {
+		const existing = registry.resolve(workerName);
+		if (existing && existing.status === "running") {
+			return {
+				content: [{ type: "text", text: `Worker name "${workerName}" is already in use by a running agent. Choose a different name or stop the existing worker first.` }],
+				isError: true,
+				details: { mode: "single" as const, results: [] },
+			};
+		}
+	}
+
+	const effectiveTask = params.context === "fork" ? wrapForkTask(task) : task;
+	let effectiveSkills: string[] | undefined;
+	if (skillOverride === false) {
+		effectiveSkills = [];
+	} else {
+		effectiveSkills = skillOverride;
+	}
+
+	// Fire-and-forget: spawn RPC worker, register in registry, return immediately
+	const promise = runSync(ctx.cwd, agents, params.agent!, effectiveTask, {
+		cwd: params.cwd,
+		signal,
+		runId,
+		spawnMode: "rpc",
+		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
+		artifactConfig,
+		maxOutput: params.maxOutput,
+		modelOverride,
+		skills: effectiveSkills,
+		onSpawn: (proc) => {
+			registry.register({
+				id: workerId,
+				name: workerName,
+				agentType: params.agent!,
+				task: effectiveTask,
+				status: "running",
+				startTime: Date.now(),
+				pid: proc.pid,
+				rpcHandle: { stdin: proc.stdin!, proc },
+				cwd: params.cwd ?? ctx.cwd,
+			});
+		},
+	});
+
+	// Emit started (outside onSpawn to avoid double-registration in index.ts handler)
+	deps.pi.events.emit("subagent:started", {
+		id: workerId,
+		agent: params.agent,
+		name: workerName,
+		task: effectiveTask,
+		_coordinatorManaged: true, // Signal to skip re-registration in event handler
+	});
+
+	// Handle completion in background
+	promise.then((result) => {
+		const output = getFinalOutput(result.messages);
+		registry.updateStatus(workerId, result.exitCode === 0 ? "completed" : "failed", output);
+		deps.pi.events.emit("subagent:complete", {
+			id: workerId,
+			agent: params.agent,
+			name: workerName,
+			success: result.exitCode === 0,
+			summary: output,
+			exitCode: result.exitCode,
+			timestamp: Date.now(),
+			usage: {
+				totalTokens: (result.usage.input || 0) + (result.usage.output || 0),
+				toolUses: result.progressSummary?.toolCount,
+				durationMs: result.progressSummary?.durationMs,
+			},
+		});
+	}).catch(() => {
+		registry.updateStatus(workerId, "failed");
+	});
+
+	const displayName = workerName ?? params.agent;
+	return {
+		content: [{ type: "text", text: `Spawned worker "${displayName}" (id: ${workerId})` }],
+		details: { mode: "single" as const, name: workerName, asyncId: workerId, results: [] },
+	};
 }
 
 function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
@@ -623,6 +748,15 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
 	let effectiveOutput: string | false | undefined = rawOutput === true ? agentConfig.output : (rawOutput as string | false | undefined);
 
+	// ── Coordinator mode: fire-and-forget RPC spawn ──────────────────────
+	if (isCoordinatorMode() && deps.registry) {
+		const coordinatorResult = spawnCoordinatorWorker({
+			params, agents, ctx, signal, runId, task, skillOverride,
+			artifactConfig, artifactsDir, modelOverride,
+		}, deps);
+		if (coordinatorResult) return coordinatorResult;
+	}
+
 	if (params.clarify === true && ctx.hasUI) {
 		const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map((m) => ({
 			provider: m.provider,
@@ -886,6 +1020,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		};
 
 		try {
+			// Coordinator mode: reject chain/parallel (they block the coordinator)
+			if (isCoordinatorMode() && (hasChain || hasTasks)) {
+				return {
+					content: [{ type: "text", text: "In coordinator mode, use single agent spawns (agent + task). Chain and parallel modes block the coordinator. Spawn individual workers instead." }],
+					isError: true,
+					details: { mode: (hasChain ? "chain" : "parallel") as Details["mode"], results: [] },
+				};
+			}
+
 			const asyncResult = runAsyncPath(execData, deps);
 			if (asyncResult) return withForkContext(asyncResult, params.context);
 

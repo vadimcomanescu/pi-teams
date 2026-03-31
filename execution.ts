@@ -156,13 +156,6 @@ export async function runSync(
 			options.onSpawn?.(proc);
 		}
 
-		// Track unexpected exits for registry cleanup (handled by caller via onSpawn)
-		proc.on("exit", (code) => {
-			if (isRpc && options.onExit) {
-				options.onExit(code ?? 1);
-			}
-		});
-
 		const jsonlWriter = createJsonlWriter(jsonlPath, proc.stdout);
 		closeJsonlWriter = () => jsonlWriter.close();
 		let buf = "";

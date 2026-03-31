@@ -42,7 +42,8 @@ import {
 	WIDGET_KEY,
 } from "./types.js";
 import { AgentRegistry } from "./agent-registry.js";
-import { isCoordinatorMode } from "./coordinator.js";
+import { isCoordinatorMode, setCoordinatorMode, getCoordinatorSettings } from "./coordinator.js";
+import { getCoordinatorSystemPrompt } from "./coordinator-prompt.js";
 import { createTaskStopTool } from "./task-stop-tool.js";
 import { createSendMessageTool } from "./send-message-tool.js";
 
@@ -147,6 +148,20 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
+	pi.registerFlag("coordinator", {
+		description: "Enable coordinator mode (orchestrate workers instead of coding directly)",
+		type: "boolean",
+		default: false,
+	});
+
+	pi.on("before_agent_start", (event) => {
+		if (isCoordinatorMode()) {
+			return {
+				systemPrompt: getCoordinatorSystemPrompt(event.systemPrompt),
+			};
+		}
+	});
+
 	const config = loadConfig();
 	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
@@ -177,6 +192,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	startResultWatcher();
 	primeExistingResults();
 
+	const registry = new AgentRegistry();
+
 	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(state, ASYNC_DIR);
 	const executor = createSubagentExecutor({
 		pi,
@@ -187,6 +204,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getSubagentSessionRoot,
 		expandTilde,
 		discoverAgents,
+		registry,
 	});
 
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
@@ -396,8 +414,6 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		},
 	};
 
-	const registry = new AgentRegistry();
-
 	pi.registerTool(tool);
 	pi.registerTool(statusTool);
 	pi.registerTool(createTaskStopTool(registry));
@@ -407,9 +423,9 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 	pi.events.on("subagent:started", (data: unknown) => {
 		handleStarted(data);
-		// Also register in agent registry if it has an id
-		const d = data as { id?: string; agent?: string; name?: string; task?: string };
-		if (d.id) {
+		const d = data as { id?: string; agent?: string; name?: string; task?: string; _coordinatorManaged?: boolean };
+		// Coordinator-managed agents are already registered via onSpawn with rpcHandle
+		if (d.id && !d._coordinatorManaged && !registry.resolve(d.id)) {
 			try {
 				registry.register({
 					id: d.id,
@@ -420,7 +436,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 					startTime: Date.now(),
 				});
 			} catch {
-				// Name collision or duplicate ID — non-fatal
+				// Name collision or duplicate ID
 			}
 		}
 	});
@@ -464,9 +480,14 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionState(ctx);
+		setCoordinatorMode(pi.getFlag("coordinator") === true);
+		if (isCoordinatorMode()) {
+			const settings = getCoordinatorSettings();
+			registry.startTimeoutSweeper(settings.workerTimeoutMs);
+		}
 	});
 	pi.on("session_switch", (_event, ctx) => {
-		registry.stopAll();
+		registry.dispose(); // stopAll + stop sweeper
 		resetSessionState(ctx);
 	});
 	pi.on("session_branch", (_event, ctx) => {

@@ -228,8 +228,6 @@ export interface RunSyncOptions {
 	/** Called immediately after spawn with the live process. For RPC mode,
 	 * allows registering the rpcHandle before blocking on completion. */
 	onSpawn?: (proc: import("node:child_process").ChildProcess) => void;
-	/** Called when the process exits (RPC mode). For registry status updates. */
-	onExit?: (exitCode: number) => void;
 	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
