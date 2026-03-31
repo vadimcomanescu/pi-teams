@@ -1,8 +1,9 @@
 {
   "name": "pi-teams",
   "version": "0.12.0",
-  "description": "Pi extension for delegating tasks to subagents with chains, parallel execution, coordinator mode, and TUI clarification",
-  "author": "Nico Bailon",
+  "description": "Pi extension for autonomous AI teams — spawn named workers, coordinate via send_message/task_stop, parallel execution, chains, and TUI clarification",
+  "author": "Vadim Comanescu",
+  "contributors": ["Nico Bailon"],
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -17,9 +18,12 @@
     "pi-package",
     "pi",
     "pi-coding-agent",
+    "teams",
+    "coordinator",
     "subagents",
     "ai",
     "agents",
+    "workers",
     "cli"
   ],
   "bin": {
