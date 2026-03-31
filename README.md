@@ -1,24 +1,74 @@
 <p>
-  <img src="banner.png" alt="pi-subagents" width="1100">
+  <img src="banner.png" alt="pi-teams" width="1100">
 </p>
 
-# pi-subagents
+# pi-teams
 
-Pi extension for delegating tasks to subagents with chains, parallel execution, TUI clarification, and async support.
+Pi extension for delegating tasks to subagents with chains, parallel execution, **coordinator mode**, TUI clarification, and async support.
 
 https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
 
 ## Installation
 
 ```bash
-pi install npm:pi-subagents
+pi install npm:pi-teams
 ```
 
 To remove:
 
 ```bash
-npx pi-subagents --remove
+npx pi-teams --remove
 ```
+
+## Coordinator Mode
+
+Coordinator mode transforms pi into an autonomous orchestrator. The main LLM plans, delegates to workers, synthesizes results, and reports back.
+
+```bash
+pi --coordinator
+```
+
+Then just describe what you want:
+
+> "Fix the auth bug in src/auth/validate.ts"
+
+The coordinator will:
+1. **Research** — spawn parallel workers to investigate the codebase
+2. **Synthesize** — read findings and craft implementation specs
+3. **Implement** — delegate targeted changes to workers
+4. **Verify** — spawn a verifier to run tests
+
+### Coordinator Tools
+
+| Tool | Purpose |
+|------|--------|
+| `subagent` | Spawn a worker (fire-and-forget, non-blocking) |
+| `send_message` | Send follow-up to a running worker by name or ID |
+| `task_stop` | Stop a running worker |
+
+### Slash Commands
+
+| Command | Description |
+|---------|------------|
+| `/workers` | List all registered workers with status |
+| `/stop-all` | Stop all running workers |
+
+### Configuration
+
+- **Max concurrent workers**: 8 (default)
+- **Worker timeout**: 5 minutes (default)
+- **Worker model**: Inherits from session (workers are full pi instances)
+
+### Named Workers
+
+Give workers names for easier routing:
+
+```
+subagent({ agent: "worker", task: "...", name: "researcher" })
+send_message({ to: "researcher", message: "also check test coverage" })
+```
+
+---
 
 If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), you can wrap subagent delegation in a slash command:
 

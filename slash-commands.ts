@@ -5,6 +5,8 @@ import { discoverAgents, discoverAgentsAll } from "./agents.js";
 import { AgentManagerComponent, type ManagerResult } from "./agent-manager.js";
 import { discoverAvailableSkills } from "./skills.js";
 import type { SubagentParamsLike } from "./subagent-executor.js";
+import { isCoordinatorMode } from "./coordinator.js";
+import type { AgentRegistry } from "./agent-registry.js";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.js";
 import {
 	applySlashUpdate,
@@ -384,6 +386,7 @@ const parseAgentArgs = (
 export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
+	registry?: AgentRegistry,
 ): void {
 	pi.registerCommand("agents", {
 		description: "Open the Agents Manager",
@@ -471,6 +474,50 @@ export function registerSlashCommands(
 	pi.registerShortcut("ctrl+shift+a", {
 		handler: async (ctx) => {
 			await openAgentManager(pi, ctx);
+		},
+	});
+
+	// Coordinator-only slash commands
+	pi.registerCommand("workers", {
+		description: "List running coordinator workers",
+		handler: async (_args, ctx) => {
+			if (!registry || !isCoordinatorMode()) {
+				if (ctx.hasUI) ctx.ui.notify("Not in coordinator mode. Start with --coordinator", "warning");
+				return;
+			}
+			const all = registry.getAll();
+			if (all.length === 0) {
+				if (ctx.hasUI) ctx.ui.notify("No workers registered", "info");
+				return;
+			}
+			const lines = all.map((a) => {
+				const name = a.name ? `${a.name} (${a.id})` : a.id;
+				const duration = a.status === "running"
+					? ` ${Math.round((Date.now() - a.startTime) / 1000)}s`
+					: "";
+				return `${a.status === "running" ? "🔄" : a.status === "completed" ? "✅" : "❌"} ${name} [${a.status}]${duration}`;
+			});
+			pi.sendMessage(
+				{ customType: "subagent-notify", content: `**Workers:**\n${lines.join("\n")}`, display: true },
+				{ triggerTurn: false },
+			);
+		},
+	});
+
+	pi.registerCommand("stop-all", {
+		description: "Stop all running coordinator workers",
+		handler: async (_args, ctx) => {
+			if (!registry || !isCoordinatorMode()) {
+				if (ctx.hasUI) ctx.ui.notify("Not in coordinator mode. Start with --coordinator", "warning");
+				return;
+			}
+			const running = registry.getRunning();
+			if (running.length === 0) {
+				if (ctx.hasUI) ctx.ui.notify("No workers running", "info");
+				return;
+			}
+			registry.stopAll();
+			if (ctx.hasUI) ctx.ui.notify(`Stopped ${running.length} worker(s)`, "info");
 		},
 	});
 }

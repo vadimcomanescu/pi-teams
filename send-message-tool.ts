@@ -10,7 +10,6 @@ import { Type } from "@sinclair/typebox";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import type { AgentRegistry } from "./agent-registry.js";
-import { isCoordinatorMode } from "./coordinator.js";
 
 // =============================================================================
 // Schema
@@ -51,13 +50,6 @@ export function createSendMessageTool(
 		parameters: SendMessageParams,
 
 		async execute(_toolCallId, params) {
-			if (!isCoordinatorMode()) {
-				return {
-					content: [{ type: "text" as const, text: "send_message is only available in coordinator mode." }],
-					isError: true,
-					details: { to: params.to, delivered: "error" as const },
-				};
-			}
 			const agent = registry.resolve(params.to);
 
 			// ── Unknown agent ────────────────────────────────────────────────

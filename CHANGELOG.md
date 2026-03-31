@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.12.0] - 2026-03-31
+
+### Added
+- **Coordinator Mode** (`--coordinator`): Transforms the main LLM into a coordinator that orchestrates worker agents autonomously. The coordinator plans, delegates to workers, synthesizes results, and reports back.
+- **Agent Registry**: Tracks running/completed agents by name and ID. Workers are addressable via name for follow-up messages. Includes timeout sweeper and lifecycle management.
+- **RPC Mode Spawning**: New `spawnMode: "rpc"` for foreground workers with piped stdin. Enables follow-up messages to running workers via JSON protocol.
+- **`send_message` tool**: Send follow-up messages to running RPC workers. Routes by name (case-insensitive) or ID.
+- **`task_stop` tool**: Stop running workers by name or ID. Sends abort command to RPC agents, SIGTERM to others.
+- **Enhanced Notifications**: Coordinator mode uses structured `<task-notification>` XML format with usage stats. Non-coordinator mode unchanged (markdown).
+- **Coordinator System Prompt**: Comprehensive prompt covering task workflow, worker management, concurrency, verification, and prompt-writing guidance.
+- **`name` parameter**: Optional name for spawned agents, making them addressable via `send_message`.
+- **`/workers` command**: List all registered workers with status and duration.
+- **`/stop-all` command**: Stop all running coordinator workers.
+- **Max concurrent workers**: Configurable limit (default: 8) enforced in coordinator mode.
+- **Worker timeout**: Configurable timeout (default: 5 min) with automatic cleanup.
+- **Builtin `coordinator` agent**: Available via `/run coordinator "task"` for on-demand use.
+
+### Changed
+- Package renamed from `pi-subagents` to `pi-teams`.
+- Repository moved to `vadimcomanescu/pi-teams`.
+- `session_switch` now calls `registry.dispose()` (stops all workers + sweeper).
+- Notification system uses `deliverAs: "followUp"` in coordinator mode to prevent mid-turn interruption.
+
 ## [Unreleased]
 
 ## [0.11.12] - 2026-03-28

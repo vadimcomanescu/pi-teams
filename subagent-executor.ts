@@ -748,8 +748,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
 	let effectiveOutput: string | false | undefined = rawOutput === true ? agentConfig.output : (rawOutput as string | false | undefined);
 
-	// ── Coordinator mode: fire-and-forget RPC spawn ──────────────────────
-	if (isCoordinatorMode() && deps.registry) {
+	// ── Coordinator spawn: fire-and-forget RPC when worker is named ─────
+	// Named workers run asynchronously and are addressable via send_message.
+	// Unnamed workers use standard blocking execution.
+	if (params.name && deps.registry) {
 		const coordinatorResult = spawnCoordinatorWorker({
 			params, agents, ctx, signal, runId, task, skillOverride,
 			artifactConfig, artifactsDir, modelOverride,
@@ -1020,15 +1022,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		};
 
 		try {
-			// Coordinator mode: reject chain/parallel (they block the coordinator)
-			if (isCoordinatorMode() && (hasChain || hasTasks)) {
-				return {
-					content: [{ type: "text", text: "In coordinator mode, use single agent spawns (agent + task). Chain and parallel modes block the coordinator. Spawn individual workers instead." }],
-					isError: true,
-					details: { mode: (hasChain ? "chain" : "parallel") as Details["mode"], results: [] },
-				};
-			}
-
 			const asyncResult = runAsyncPath(execData, deps);
 			if (asyncResult) return withForkContext(asyncResult, params.context);
 

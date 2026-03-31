@@ -4,18 +4,16 @@
  * Uses a real AgentRegistry instance — no mocks.
  */
 
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { AgentRegistry } from "../agent-registry.js";
 import { createTaskStopTool } from "../task-stop-tool.js";
-import { setCoordinatorMode } from "../coordinator.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function makeRegistry(): AgentRegistry {
-	setCoordinatorMode(true);
 	return new AgentRegistry();
 }
 
@@ -68,9 +66,6 @@ describe("task_stop tool", () => {
 		tool = createTaskStopTool(registry);
 	});
 
-	afterEach(() => {
-		setCoordinatorMode(false);
-	});
 
 	it("stops a running agent by name and returns success", async () => {
 		registerRunning(registry, { id: "run-1", name: "researcher" });

@@ -5,7 +5,7 @@
  * stdin writes. No mocking.
  */
 
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import * as path from "node:path";
@@ -16,7 +16,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Dynamically import modules so the file can be run without build artefacts.
 import { AgentRegistry } from "../agent-registry.js";
 import { createSendMessageTool } from "../send-message-tool.js";
-import { setCoordinatorMode } from "../coordinator.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,12 +52,7 @@ describe("send_message tool", () => {
 	let registry: InstanceType<typeof AgentRegistry>;
 
 	beforeEach(() => {
-		setCoordinatorMode(true);
 		registry = new AgentRegistry();
-	});
-
-	afterEach(() => {
-		setCoordinatorMode(false);
 	});
 
 	it("routes a message to a running RPC agent by name and writes correct JSON to stdin", async () => {

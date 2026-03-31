@@ -9,7 +9,6 @@ import { Type } from "@sinclair/typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { AgentRegistry } from "./agent-registry.js";
-import { isCoordinatorMode } from "./coordinator.js";
 
 // =============================================================================
 // Schema
@@ -36,13 +35,6 @@ export function createTaskStopTool(
 		parameters: TaskStopParams,
 
 		async execute(_id, params) {
-			if (!isCoordinatorMode()) {
-				return {
-					content: [{ type: "text" as const, text: "task_stop is only available in coordinator mode." }],
-					isError: true,
-					details: { task_id: params.task_id },
-				};
-			}
 			const { task_id, reason } = params;
 			const agent = registry.resolve(task_id);
 

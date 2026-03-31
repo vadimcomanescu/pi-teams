@@ -148,18 +148,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
-	pi.registerFlag("coordinator", {
-		description: "Enable coordinator mode (orchestrate workers instead of coding directly)",
-		type: "boolean",
-		default: false,
-	});
-
+	// Coordinator mode is always active — the LLM gets the coordinator
+	// system prompt and tools (subagent, send_message, task_stop) automatically.
+	// The user just says "build a team" or "use workers" and it works.
 	pi.on("before_agent_start", (event) => {
-		if (isCoordinatorMode()) {
-			return {
-				systemPrompt: getCoordinatorSystemPrompt(event.systemPrompt),
-			};
-		}
+		return {
+			systemPrompt: getCoordinatorSystemPrompt(event.systemPrompt),
+		};
 	});
 
 	const config = loadConfig();
@@ -419,7 +414,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 	pi.registerTool(createTaskStopTool(registry));
 	pi.registerTool(createSendMessageTool(registry));
 
-	registerSlashCommands(pi, state);
+	registerSlashCommands(pi, state, registry);
 
 	pi.events.on("subagent:started", (data: unknown) => {
 		handleStarted(data);
@@ -480,11 +475,10 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionState(ctx);
-		setCoordinatorMode(pi.getFlag("coordinator") === true);
-		if (isCoordinatorMode()) {
-			const settings = getCoordinatorSettings();
-			registry.startTimeoutSweeper(settings.workerTimeoutMs);
-		}
+		// Coordinator capabilities are always available. The timeout sweeper
+		// runs unconditionally (no-op when no workers are registered).
+		setCoordinatorMode(true);
+		registry.startTimeoutSweeper(getCoordinatorSettings().workerTimeoutMs);
 	});
 	pi.on("session_switch", (_event, ctx) => {
 		registry.dispose(); // stopAll + stop sweeper
