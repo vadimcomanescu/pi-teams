@@ -1,12 +1,15 @@
-<p>
-  <img src="banner.png" alt="pi-teams" width="1100">
-</p>
-
 # pi-teams
 
 Pi team orchestration extension for named teammates, shared task boards, raw worker delegation, chains, parallel execution, and async support.
 
-https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
+Forked from `pi-subagents`, then reshaped around a team-first workflow: lead sessions create one active team, spawn named teammates, coordinate through a shared task board, and synthesize results from automatic teammate notifications.
+
+**What pi-teams is for**
+- named teammates inside one lead-managed team
+- shared mutable task boards, not private lead bookkeeping
+- teammate continuation, both while running and after completion when a saved session exists
+- notification-first coordination, with inspection tools as secondary support
+- raw worker plumbing still available for advanced execution paths
 
 ## Installation
 

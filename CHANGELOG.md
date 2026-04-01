@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-04-01
+
+### Changed
+- Rewrote the README front matter to remove stale pi-subagents media and explain the actual pi-teams product clearly.
+- Added explicit fork attribution without reusing old pi-subagents visuals or demo links.
+
 ## [1.0.1] - 2026-04-01
 
 ### Changed
