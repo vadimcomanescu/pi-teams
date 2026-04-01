@@ -12,6 +12,7 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { AGENTS_MANAGER_SHORTCUT_LABEL } from "./shortcut-contract.js";
 
 const EXTENSION_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "pi-teams");
 const REPO_URL = "https://github.com/vadimcomanescu/pi-teams.git";
@@ -22,7 +23,7 @@ const isHelp = args.includes("--help") || args.includes("-h");
 
 if (isHelp) {
 	console.log(`
-pi-teams - Pi extension for managing teams of agents, shared tasks, and raw worker delegation
+pi-teams - Pi team orchestration extension for named teammates, shared task boards, and raw worker delegation
 
 Usage:
   npx pi-teams          Install the extension
@@ -96,7 +97,7 @@ Primary lead tools:
   • task_create     - Add a shared team task
   • task_list       - List shared team tasks
   • task_read       - Read one shared team task
-  • task_update     - Update task status or owner
+  • task_update     - Update shared task board state
 
 Advanced worker tools:
   • team            - Delegate raw worker execution (single, chain, parallel)
@@ -107,6 +108,7 @@ Advanced worker tools:
 Notification-first coordination:
   • Teammate completions arrive automatically as <task-notification> messages
   • Omit team_name after team_create, follow-up tools resolve the current team
+  • task_update is shared board state, leads can edit any task and teammates can claim or complete their own work
   • Use check_teammate only when you need an explicit inspection snapshot
 
 Operator visibility commands:
@@ -115,7 +117,7 @@ Operator visibility commands:
   • /stop-all         - Stop all running workers in the current lead session
 
 Agents Manager shortcut:
-  • Ctrl+Shift+A      - Open the Agents Manager overlay
+  • ${AGENTS_MANAGER_SHORTCUT_LABEL}      - Open the Agents Manager overlay
 
 Documentation: ${EXTENSION_DIR}/README.md
 `);

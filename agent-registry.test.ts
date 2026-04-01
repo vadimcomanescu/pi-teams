@@ -107,6 +107,24 @@ describe("AgentRegistry", () => {
 			assert.ok(agent.endTime! > 0);
 		});
 
+		it("preserves stopped status against late process exit updates", () => {
+			registry.register(makeAgent({ id: "a1", name: "worker" }));
+			registry.updateStatus("a1", "stopped", "Stopped by lead");
+			registry.updateStatus("a1", "failed", "late exit after stop");
+			const resolved = registry.resolve("a1")!;
+			assert.equal(resolved.status, "stopped");
+			assert.equal(resolved.result, "Stopped by lead");
+		});
+
+		it("preserves timed_out status against late process exit updates", () => {
+			registry.register(makeAgent({ id: "a1", name: "worker" }));
+			registry.updateStatus("a1", "timed_out", "Timed out after 5000ms");
+			registry.updateStatus("a1", "failed", "late exit after timeout");
+			const resolved = registry.resolve("a1")!;
+			assert.equal(resolved.status, "timed_out");
+			assert.equal(resolved.result, "Timed out after 5000ms");
+		});
+
 		it("no-ops for unknown id", () => {
 			// Should not throw
 			registry.updateStatus("nonexistent", "completed");

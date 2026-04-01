@@ -1,14 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+## [1.0.0] - 2026-04-01
+
+### Added
+- Stable `pi-teams` package release built around a team-first public surface: named teammates, shared task boards, teammate continuation, and notification-first coordination.
+- Provider hard-limit fail-fast detection for worker runs, so repeated quota and billing failures stop immediately instead of burning the full worker timeout.
+
+### Changed
+- Package metadata, installer text, and README now describe pi-teams as a team orchestration extension with named teammates and shared task boards.
+- Agents Manager shortcut moved to `Ctrl+Shift+M` so pi-teams no longer conflicts with pi-subagents when both extensions are installed.
+
 ## [0.12.0] - 2026-03-31
 
 ### Added
 - **First-class team lifecycle tools**: `team_create`, `spawn_teammate`, `check_teammate`, and `team_shutdown` establish the primary public surface for managing teams of agents.
-- **Shared task tools**: `task_create`, `task_list`, `task_read`, and `task_update` persist team work state so the lead can assign, track, and synthesize work cleanly.
+- **Shared task tools**: `task_create`, `task_list`, `task_read`, and `task_update` persist team work state so leads and teammates can coordinate on one shared task board.
 - **Lead-session coordinator prompt**: Lead sessions now coordinate teams by default, with a team-first prompt focused on teammates, shared tasks, concurrency, and synthesis.
 - **Agent Registry**: Tracks running/completed agents by name and ID. Workers are addressable via name for follow-up messages. Includes timeout sweeper and lifecycle management.
 - **RPC Mode Spawning**: New `spawnMode: "rpc"` for foreground workers with piped stdin. Enables follow-up messages to running workers via JSON protocol.
-- **`send_message` tool**: Follow up with a running teammate or worker. Routing is by name (case-insensitive) or ID, and the contract is explicitly running-only.
+- **`send_message` tool**: Follow up with a running teammate or worker, or resume an idle teammate when a saved session is available. Routing is by name (case-insensitive) or ID.
 - **`task_stop` tool**: Stop a running teammate or worker. Sends abort command to RPC agents, SIGTERM to others.
 - **Enhanced Notifications**: Lead sessions receive structured `<task-notification>` XML with usage stats. Non-lead markdown notifications remain unchanged.
 - **Operator visibility commands**: `/team` shows the active team plus shared tasks, `/workers` lists registered workers, and `/stop-all` stops running workers in the current lead session.
@@ -21,8 +33,6 @@
 - The public contract is now team-first. The low-level `team` and `team_status` worker tools are documented as advanced plumbing.
 - `session_switch` now calls `registry.dispose()` (stops all workers + sweeper).
 - Notification system uses `deliverAs: "followUp"` in lead sessions to prevent mid-turn interruption.
-
-## [Unreleased]
 
 ## [0.11.12] - 2026-03-28
 

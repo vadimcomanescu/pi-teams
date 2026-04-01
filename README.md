@@ -4,7 +4,7 @@
 
 # pi-teams
 
-Pi extension for managing teams of agents, shared tasks, raw worker delegation, chains, parallel execution, and async support.
+Pi team orchestration extension for named teammates, shared task boards, raw worker delegation, chains, parallel execution, and async support.
 
 https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
 
@@ -32,7 +32,7 @@ Lead sessions use the coordinator prompt by default. Start with the first-class 
 | `spawn_teammate` | Launch a named teammate inside that team |
 | `check_teammate` | Inspect teammate status and last summary |
 | `team_shutdown` | Stop the active team |
-| `task_create` / `task_list` / `task_read` / `task_update` | Manage the shared task list |
+| `task_create` / `task_list` / `task_read` / `task_update` | Manage the shared task board |
 
 ### Advanced worker tools
 
@@ -44,6 +44,8 @@ Lead sessions use the coordinator prompt by default. Start with the first-class 
 | `task_stop` | Stop a running teammate or worker |
 
 > After `team_create`, follow-up team and task tools can omit `team_name`. They resolve against the current team automatically.
+>
+> `task_update` is shared board state. Leads can edit any task. Teammates can claim and complete their own tasks.
 
 ### User says
 
@@ -114,6 +116,13 @@ task_create({
 ```
 
 Use `default_model` on `team_create` for the team-wide fallback. Override `model` per teammate only when one role needs something different.
+
+Model resolution order is:
+1. `spawn_teammate({ model })`
+2. the team's `default_model`
+3. the spawned agent's own default model
+
+If you want predictable provider usage, set `default_model` explicitly to a provider and model you already have access to.
 
 If you want pure tool visibility instead of slash commands, use:
 
@@ -317,7 +326,7 @@ You can combine `--fork` and `--bg` in any order:
 
 ## Agents Manager
 
-Press **Ctrl+Shift+A** or type `/agents` to open the Agents Manager overlay — a TUI for browsing, viewing, editing, creating, and launching agents and chains.
+Press **Ctrl+Shift+M** or type `/agents` to open the Agents Manager overlay — a TUI for browsing, viewing, editing, creating, and launching agents and chains.
 
 **Screens:**
 
@@ -397,7 +406,7 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 ## Features (beyond base)
 
 - **Slash Commands**: `/run`, `/chain`, `/parallel` with tab-completion and live progress
-- **Agents Manager Overlay**: Browse, view, edit, create, delete, and launch agents/chains from a TUI (`Ctrl+Shift+A`)
+- **Agents Manager Overlay**: Browse, view, edit, create, delete, and launch agents/chains from a TUI (`Ctrl+Shift+M`)
 - **Management Actions**: LLM can list, inspect, create, update, and delete agent/chain definitions via `action` field
 - **Chain Files**: Reusable `.chain.md` files with per-step config, saveable from the clarify TUI
 - **Multi-select & Parallel**: Select agents in the overlay, launch as chain or parallel

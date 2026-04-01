@@ -31,6 +31,7 @@ describe("team tools integration", () => {
 	let registry: AgentRegistry;
 	let sessionId: string;
 	let currentTeammateTeamName: string | null;
+	let currentTeammateName: string | null;
 	let teamManager: TeamManager;
 	let spawnedRequests: any[];
 
@@ -39,12 +40,14 @@ describe("team tools integration", () => {
 		registry = new AgentRegistry();
 		sessionId = "lead-session";
 		currentTeammateTeamName = null;
+		currentTeammateName = null;
 		spawnedRequests = [];
 		teamManager = new TeamManager({
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => sessionId,
 			getCurrentTeammateTeamName: () => currentTeammateTeamName,
+			getCurrentTeammateName: () => currentTeammateName,
 		});
 	});
 
@@ -139,16 +142,17 @@ describe("team tools integration", () => {
 		assert.match(result.content[0].text, /Docs review/);
 	});
 
-	it("only the lead session can mutate team and task state", async () => {
+	it("still keeps team creation lead-owned for foreign sessions", async () => {
 		const createTeam = createTeamCreateTool(teamManager);
 		await exec(createTeam, { team_name: "repo-review" });
 
-		sessionId = "teammate-session";
+		sessionId = "foreign-session";
 		const foreignManager = new TeamManager({
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => sessionId,
 			getCurrentTeammateTeamName: () => null,
+			getCurrentTeammateName: () => null,
 		});
 		const createTask = createTaskCreateTool({
 			teamManager: foreignManager,
@@ -162,5 +166,95 @@ describe("team tools integration", () => {
 		});
 		assert.equal(result.isError, true);
 		assert.match(result.content[0].text, /Only the lead session may mutate team/);
+	});
+
+	it("lets teammates claim and complete tasks from current team context", async () => {
+		const createTeam = createTeamCreateTool(teamManager);
+		const createTask = createTaskCreateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const updateTask = createTaskUpdateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const readTask = createTaskListTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+
+		await exec(createTeam, { team_name: "repo-review" });
+		const task = await exec(createTask, { subject: "Docs review", description: "Check README" });
+
+		currentTeammateTeamName = "repo-review";
+		currentTeammateName = "docs";
+		sessionId = "teammate-session";
+
+		const claimed = await exec(updateTask, { task_id: task.details.id, status: "in_progress" });
+		assert.equal(claimed.isError, undefined);
+		assert.equal(claimed.details.owner, "docs");
+		assert.equal(claimed.details.status, "in_progress");
+
+		const completed = await exec(updateTask, { task_id: task.details.id, status: "completed" });
+		assert.equal(completed.isError, undefined);
+		assert.equal(completed.details.owner, "docs");
+		assert.equal(completed.details.status, "completed");
+
+		const listed = await exec(readTask, {});
+		assert.match(listed.content[0].text, /owner: docs/);
+		assert.match(listed.content[0].text, /\[completed\]/);
+	});
+
+	it("prevents teammates from taking over or deleting another teammate's task", async () => {
+		const createTeam = createTeamCreateTool(teamManager);
+		const createTask = createTaskCreateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const updateTask = createTaskUpdateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+
+		await exec(createTeam, { team_name: "repo-review" });
+		const task = await exec(createTask, { subject: "Testing review", description: "Check coverage" });
+		await exec(updateTask, { task_id: task.details.id, owner: "testing", status: "in_progress" });
+
+		currentTeammateTeamName = "repo-review";
+		currentTeammateName = "docs";
+		sessionId = "teammate-session";
+
+		const takeover = await exec(updateTask, { task_id: task.details.id, owner: "docs" });
+		assert.equal(takeover.isError, true);
+		assert.match(takeover.content[0].text, /owned by teammate "testing"/i);
+
+		const deleted = await exec(updateTask, { task_id: task.details.id, status: "deleted" });
+		assert.equal(deleted.isError, true);
+		assert.match(deleted.content[0].text, /cannot mark tasks deleted/i);
+	});
+
+	it("prevents teammates from mutating tasks after the team is shut down", async () => {
+		const createTeam = createTeamCreateTool(teamManager);
+		const createTask = createTaskCreateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const updateTask = createTaskUpdateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const shutdown = createTeamShutdownTool(teamManager);
+
+		await exec(createTeam, { team_name: "repo-review" });
+		const task = await exec(createTask, { subject: "Docs review", description: "Check README" });
+		await exec(shutdown, { team_name: "repo-review" });
+
+		currentTeammateTeamName = "repo-review";
+		currentTeammateName = "docs";
+		sessionId = "teammate-session";
+
+		const result = await exec(updateTask, { task_id: task.details.id, status: "in_progress" });
+		assert.equal(result.isError, true);
+		assert.match(result.content[0].text, /not active/i);
 	});
 });

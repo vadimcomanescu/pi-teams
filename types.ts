@@ -153,7 +153,7 @@ export interface ArtifactConfig {
 export interface AsyncStatus {
 	runId: string;
 	mode: "single" | "chain";
-	state: "queued" | "running" | "complete" | "failed";
+	state: "queued" | "running" | "complete" | "failed" | "stopped" | "timed_out";
 	startedAt: number;
 	endedAt?: number;
 	lastUpdate?: number;
@@ -169,7 +169,7 @@ export interface AsyncJobState {
 	asyncId: string;
 	asyncDir: string;
 	name?: string;
-	status: "queued" | "running" | "complete" | "failed";
+	status: "queued" | "running" | "complete" | "failed" | "stopped" | "timed_out";
 	mode?: "single" | "chain";
 	agents?: string[];
 	currentStep?: number;

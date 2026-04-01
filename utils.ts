@@ -182,6 +182,37 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
 	return items;
 }
 
+const HARD_PROVIDER_LIMIT_PATTERNS = [
+	/would exceed your account'?s rate limit/i,
+	/insufficient_quota/i,
+	/exceeded your current quota/i,
+	/quota exceeded/i,
+	/out of credits?/i,
+	/credits? (?:have been )?exhausted/i,
+	/insufficient credits?/i,
+	/payment required/i,
+	/billing (?:hard )?limit/i,
+];
+
+/**
+ * Detect non-recoverable provider quota and billing errors.
+ * These should fail fast instead of burning the full worker timeout retrying.
+ */
+export function detectFatalProviderError(errorMessage: string | undefined): ErrorInfo {
+	if (!errorMessage?.trim()) return { hasError: false };
+	for (const pattern of HARD_PROVIDER_LIMIT_PATTERNS) {
+		if (pattern.test(errorMessage)) {
+			return {
+				hasError: true,
+				exitCode: 1,
+				errorType: "provider",
+				details: errorMessage.trim().slice(0, 500),
+			};
+		}
+	}
+	return { hasError: false };
+}
+
 /**
  * Detect errors in team execution from messages (only errors with no subsequent success)
  */

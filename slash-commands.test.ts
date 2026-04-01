@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import {
+	AGENTS_MANAGER_SHORTCUT_KEY,
+	RESERVED_SHORTCUT_KEYS,
+} from "./shortcut-contract.js";
 
 const SLASH_RESULT_TYPE = "team-slash-result";
 const SLASH_TEAM_REQUEST_EVENT = "team:slash:request";
@@ -101,6 +105,25 @@ function createCommandContext() {
 }
 
 describe("slash command custom message delivery", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
+	it("registers the shared non-conflicting Agents Manager shortcut", () => {
+		const shortcuts: string[] = [];
+		const pi = {
+			events: createEventBus(),
+			registerCommand() {},
+			registerShortcut(key: string) {
+				shortcuts.push(key);
+			},
+			sendMessage() {},
+		};
+
+		registerSlashCommands!(pi, createState(process.cwd()));
+
+		assert.deepEqual(shortcuts, [AGENTS_MANAGER_SHORTCUT_KEY]);
+		for (const reserved of RESERVED_SHORTCUT_KEYS) {
+			assert.ok(!shortcuts.includes(reserved), `${reserved} should stay reserved for other extensions`);
+		}
+	});
+
 	it("/run sends an inline slash result message after a successful bridge response", async () => {
 		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
@@ -182,7 +205,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		assert.equal(final.display, false);
 	});
 
-	it("/team shows the active team and shared tasks in lead sessions", async () => {
+	it("/team shows the active team, shared tasks, and teammate continuation state in lead sessions", async () => {
 		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
 		const pi = {
@@ -197,6 +220,17 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		};
 		setCoordinatorMode?.(true);
 		registerSlashCommands!(pi, createState(process.cwd()), {
+			registry: {
+				resolve: (id: string) => id === "a1"
+					? {
+						id: "a1",
+						name: "architecture",
+						status: "completed",
+						sessionFile: "/tmp/architecture.jsonl",
+						result: "Architecture review completed",
+					}
+					: undefined,
+			} as unknown,
 			teamManager: {
 				getActiveTeam: () => ({
 					name: "repo-review",
@@ -237,8 +271,46 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		assert.equal(message.display, true);
 		assert.match(message.content, /\*\*Team:\*\* repo-review \[active\]/);
 		assert.match(message.content, /\*\*Teammates\*\*/);
-		assert.match(message.content, /architecture \[running\]/);
+		assert.match(message.content, /architecture \[completed\].*continuation=resume/);
+		assert.match(message.content, /Architecture review completed/);
 		assert.match(message.content, /\*\*Tasks\*\*/);
 		assert.match(message.content, /task-1234 \[pending\] owner=architecture Architecture review/);
+	});
+
+	it("/workers lists only running workers", async () => {
+		const sent: unknown[] = [];
+		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+		const pi = {
+			events: createEventBus(),
+			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }) {
+				commands.set(name, spec);
+			},
+			registerShortcut() {},
+			sendMessage(message: unknown) {
+				sent.push(message);
+			},
+		};
+		setCoordinatorMode?.(true);
+		registerSlashCommands!(pi, createState(process.cwd()), {
+			registry: {
+				getRunning: () => [
+					{ id: "run-1", name: "architecture", status: "running", startTime: Date.now() - 1000 },
+				],
+				getAll: () => [
+					{ id: "run-1", name: "architecture", status: "running", startTime: Date.now() - 1000 },
+					{ id: "done-1", name: "docs", status: "completed", startTime: Date.now() - 2000 },
+				],
+			},
+		});
+
+		await commands.get("workers")!.handler("", createCommandContext());
+		setCoordinatorMode?.(false);
+
+		assert.equal(sent.length, 1, "should emit one workers message");
+		const message = sent[0] as { content: string; display: boolean };
+		assert.equal(message.display, true);
+		assert.match(message.content, /architecture/);
+		assert.doesNotMatch(message.content, /docs/);
+		assert.doesNotMatch(message.content, /completed/);
 	});
 });

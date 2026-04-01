@@ -7,6 +7,8 @@ import { discoverAvailableSkills } from "./skills.js";
 import type { TeamParamsLike } from "./team-executor.js";
 import { isCoordinatorMode } from "./coordinator.js";
 import type { AgentRegistry } from "./agent-registry.js";
+import { describeTeammateLifecycle } from "./teammate-lifecycle.js";
+import { AGENTS_MANAGER_SHORTCUT_KEY } from "./shortcut-contract.js";
 import type { SlashTeamResponse, SlashTeamUpdate } from "./slash-bridge.js";
 import type { TaskStore, TeamTask } from "./task-store.js";
 import type { Team, TeamManager } from "./team-manager.js";
@@ -270,10 +272,22 @@ function formatMemberLine(team: Team, member: Team["members"][number], registry?
 		.filter((task) => task.owner?.toLowerCase() === member.name.toLowerCase())
 		.map((task) => task.id);
 	const taskSuffix = ownedTaskIds.length > 0 ? ` tasks=${ownedTaskIds.join(", ")}` : "";
+	const lifecycle = describeTeammateLifecycle({
+		status,
+		sessionFile: live?.sessionFile,
+		acceptsFollowUps: Boolean(live?.rpcHandle),
+		active: team.state === "active",
+	});
+	const continuation = lifecycle.canQueueFollowUp
+		? "follow_up"
+		: lifecycle.canResume
+			? "resume"
+			: "none";
+	const continuationSuffix = ` continuation=${continuation}`;
 	const summary = summarizeLine(live?.result ?? member.lastSummary);
 	return summary
-		? `- ${member.name} [${status}] model=${effectiveModel}${taskSuffix}\n  - ${summary}`
-		: `- ${member.name} [${status}] model=${effectiveModel}${taskSuffix}`;
+		? `- ${member.name} [${status}] model=${effectiveModel}${taskSuffix}${continuationSuffix}\n  - ${summary}`
+		: `- ${member.name} [${status}] model=${effectiveModel}${taskSuffix}${continuationSuffix}`;
 }
 
 function buildTeamOverview(team: Team, tasks: TeamTask[], registry?: AgentRegistry): string {
@@ -528,7 +542,7 @@ export function registerSlashCommands(
 		},
 	});
 
-	pi.registerShortcut("ctrl+shift+t", {
+	pi.registerShortcut(AGENTS_MANAGER_SHORTCUT_KEY, {
 		handler: async (ctx) => {
 			await openAgentManager(pi, ctx);
 		},
@@ -574,12 +588,12 @@ export function registerSlashCommands(
 				if (ctx.hasUI) ctx.ui.notify("Worker registry is not available in this session.", "warning");
 				return;
 			}
-			const all = deps.registry.getAll();
-			if (all.length === 0) {
-				if (ctx.hasUI) ctx.ui.notify("No workers registered", "info");
+			const running = deps.registry.getRunning();
+			if (running.length === 0) {
+				if (ctx.hasUI) ctx.ui.notify("No workers running", "info");
 				return;
 			}
-			const lines = all.map((a) => {
+			const lines = running.map((a) => {
 				const name = a.name ? `${a.name} (${a.id})` : a.id;
 				const duration = a.status === "running"
 					? ` ${Math.round((Date.now() - a.startTime) / 1000)}s`

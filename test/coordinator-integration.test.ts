@@ -76,6 +76,8 @@ describe("coordinator system prompt", { skip: !available ? "modules not availabl
 		assert.ok(prompt.includes("send_message"), "should mention send_message tool");
 		assert.ok(prompt.includes("task_stop"), "should mention task_stop tool");
 		assert.ok(prompt.includes("resume an idle teammate"), "should document teammate continuation");
+		assert.ok(prompt.includes("teammates can update task ownership and completion"), "should teach shared task board semantics");
+		assert.ok(!prompt.includes("Task mutation is lead-owned"), "should not teach the removed lead-owned task canon");
 		assert.ok(prompt.includes("notifications are the primary coordination loop"), "should guide notification-first coordination");
 		assert.ok(prompt.includes("<task-notification>"), "should describe notification format");
 		assert.ok(prompt.includes("### Task Workflow"), "should have workflow section");
@@ -114,6 +116,7 @@ describe("coordinator system prompt", { skip: !available ? "modules not availabl
 		}
 		assert.ok(prompt.includes("resume an idle teammate"), "prompt should document teammate continuation");
 		assert.ok(coordinatorAgent.includes("resume an idle teammate"), "builtin coordinator should document teammate continuation");
+		assert.ok(prompt.includes("teammates can update task ownership and completion"), "prompt should describe the shared task board");
 		assert.ok(prompt.includes("notifications are the primary coordination loop"), "prompt should emphasize notification-first coordination");
 		assert.ok(!prompt.includes("--coordinator"), "prompt should not require a coordinator flag");
 		assert.ok(!coordinatorAgent.includes("--coordinator"), "builtin coordinator should not require a coordinator flag");

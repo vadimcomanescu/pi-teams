@@ -9,11 +9,13 @@ interface DetectErrorResult {
 }
 
 type DetectTeamError = (messages: unknown[]) => DetectErrorResult;
+type DetectFatalProviderError = (errorMessage: string | undefined) => DetectErrorResult;
 
 let detectTeamError: DetectTeamError | undefined;
+let detectFatalProviderError: DetectFatalProviderError | undefined;
 let available = true;
 try {
-	({ detectTeamError } = await import("./utils.ts"));
+	({ detectTeamError, detectFatalProviderError } = await import("./utils.ts"));
 } catch {
 	// Skip in lean unit mode when runtime-only imports are unavailable.
 	available = false;
@@ -52,6 +54,27 @@ function assistantToolCall(toolName: string): Record<string, unknown> {
 		model: "test",
 	};
 }
+
+describe("detectFatalProviderError", { skip: !available ? "utils not importable" : undefined }, () => {
+	it("detects Anthropic account rate limit exhaustion as fatal", () => {
+		const result = detectFatalProviderError(
+			"429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"}}",
+		);
+		assert.equal(result.hasError, true);
+		assert.equal(result.errorType, "provider");
+	});
+
+	it("detects insufficient quota billing failures as fatal", () => {
+		const result = detectFatalProviderError("Error code: 429 - insufficient_quota, exceeded your current quota");
+		assert.equal(result.hasError, true);
+		assert.equal(result.errorType, "provider");
+	});
+
+	it("does not flag generic provider hiccups as fatal", () => {
+		const result = detectFatalProviderError("503 overloaded, retrying shortly");
+		assert.equal(result.hasError, false);
+	});
+});
 
 describe("detectTeamError", { skip: !available ? "utils not importable" : undefined }, () => {
 	// ---- Basic detection (must still work) ----

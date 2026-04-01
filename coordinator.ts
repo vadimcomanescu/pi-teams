@@ -40,6 +40,7 @@ export type RuntimeRole = "lead" | "teammate" | "raw-worker";
 
 export interface TeammateRuntimeMetadata {
 	teamName: string;
+	teammateName: string;
 	teammateNames: string[];
 	assignedTaskIds: string[];
 	configPath: string;
@@ -48,6 +49,7 @@ export interface TeammateRuntimeMetadata {
 
 const RUNTIME_ROLE_ENV = "PI_TEAMS_RUNTIME_ROLE";
 const TEAM_NAME_ENV = "PI_TEAMS_TEAM_NAME";
+const TEAMMATE_NAME_ENV = "PI_TEAMS_TEAMMATE_NAME";
 const TEAMMATE_NAMES_ENV = "PI_TEAMS_TEAMMATE_NAMES_JSON";
 const ASSIGNED_TASK_IDS_ENV = "PI_TEAMS_ASSIGNED_TASK_IDS_JSON";
 const TEAM_CONFIG_PATH_ENV = "PI_TEAMS_TEAM_CONFIG_PATH";
@@ -74,6 +76,7 @@ export function buildRuntimeEnv(
 	};
 	if (role === "teammate" && metadata) {
 		env[TEAM_NAME_ENV] = metadata.teamName;
+		env[TEAMMATE_NAME_ENV] = metadata.teammateName;
 		env[TEAMMATE_NAMES_ENV] = JSON.stringify(metadata.teammateNames);
 		env[ASSIGNED_TASK_IDS_ENV] = JSON.stringify(metadata.assignedTaskIds);
 		env[TEAM_CONFIG_PATH_ENV] = metadata.configPath;
@@ -85,9 +88,10 @@ export function buildRuntimeEnv(
 export function getTeammateRuntimeMetadata(): TeammateRuntimeMetadata | null {
 	if (getRuntimeRole() !== "teammate") return null;
 	const teamName = process.env[TEAM_NAME_ENV];
+	const teammateName = process.env[TEAMMATE_NAME_ENV];
 	const configPath = process.env[TEAM_CONFIG_PATH_ENV];
 	const tasksPath = process.env[TEAM_TASKS_PATH_ENV];
-	if (!teamName || !configPath || !tasksPath) return null;
+	if (!teamName || !teammateName || !configPath || !tasksPath) return null;
 	const parseJsonArray = (value: string | undefined): string[] => {
 		if (!value) return [];
 		try {
@@ -99,6 +103,7 @@ export function getTeammateRuntimeMetadata(): TeammateRuntimeMetadata | null {
 	};
 	return {
 		teamName,
+		teammateName,
 		teammateNames: parseJsonArray(process.env[TEAMMATE_NAMES_ENV]),
 		assignedTaskIds: parseJsonArray(process.env[ASSIGNED_TASK_IDS_ENV]),
 		configPath,
@@ -110,20 +115,25 @@ export function getCurrentTeammateTeamName(): string | null {
 	return getTeammateRuntimeMetadata()?.teamName ?? null;
 }
 
+export function getCurrentTeammateName(): string | null {
+	return getTeammateRuntimeMetadata()?.teammateName ?? null;
+}
+
 export function getTeammateSystemPromptBlock(): string | null {
 	const metadata = getTeammateRuntimeMetadata();
 	if (!metadata) return null;
 	const teammateNames = metadata.teammateNames.length > 0 ? metadata.teammateNames.join(", ") : "(none yet)";
 	const taskIds = metadata.assignedTaskIds.length > 0 ? metadata.assignedTaskIds.join(", ") : "(none assigned yet)";
 	return [
-		`You are a teammate in team "${metadata.teamName}".`,
+		`You are teammate "${metadata.teammateName}" in team "${metadata.teamName}".`,
 		`Other teammates: ${teammateNames}.`,
 		"The lead manages the team and may send you follow-up messages.",
 		`Assigned task ids: ${taskIds}.`,
 		`Team config path: ${metadata.configPath}.`,
 		`Tasks file path: ${metadata.tasksPath}.`,
 		"Read task state to understand assigned work.",
-		"Do not mutate team lifecycle or task state unless explicitly allowed.",
+		"Use task_update to claim or complete tasks that belong to you.",
+		"Do not mutate team lifecycle, delete tasks, or reassign another teammate's task.",
 		"When you finish, report clearly so the lead can synthesize and update tasks.",
 	].join("\n");
 }

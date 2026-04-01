@@ -1,3 +1,7 @@
+# Archived plan: pi-teams v1 launch
+
+Archived on 2026-04-01 after the team-first public surface, shared task board, teammate continuation, notification-first coordination, and release packaging checks were completed. Keep this file as implementation history, not as an active task list.
+
 # Pi Teams: Coordinator + Worker Architecture
 
 ## Goal
@@ -93,16 +97,16 @@ This is the practical checklist for deciding whether the user experience matches
 
 | User expectation | Claude-style target behavior | Current pi-teams status |
 |---|---|---|
-| I can just ask for a team in natural language | The coordinator naturally maps that request into team creation, teammate spawning, shared tasks, waiting, and synthesis | **Mostly aligned**. Prompt + README now teach this flow clearly. |
+| I can just ask for a team in natural language | The coordinator naturally maps that request into team creation, teammate spawning, shared tasks, waiting, and synthesis | **Aligned**. Prompt + README + installer text all teach this flow clearly. |
 | I do not need to know internal tool syntax | The user talks naturally, the lead handles orchestration internally | **Aligned**. This is the canonical human-facing contract. |
-| Creating a team should feel like starting a collaborative mode, not entering a separate admin product | Team creation is first-class, and teammate work feels like normal collaborative delegation inside that team | **Partially aligned**. This is mostly a coordinator-behavior concern now, not a requirement that internal tool names match the reference exactly. |
-| Once teammates are launched, they report back automatically | The lead should receive teammate progress/completion without manual polling | **Aligned enough**. Notifications exist and are the primary return path. |
-| The lead should not need to babysit status checks | Inspection commands may exist, but the default loop is notification-first | **Partially aligned**. We have automatic notifications, but the current design and docs still lean on explicit `check_teammate` / `/team` more than the reference UX. |
-| If a teammate already has useful context, continuing them should feel normal | Idle/waiting teammates are still naturally addressable; context reuse is a first-class behavior | **Not aligned yet**. Our current documented contract makes `send_message` running-only, which is stricter than the reference UX. |
-| The team should share a living task board | Tasks are collaborative coordination state, not just lead bookkeeping | **Not aligned yet**. Our current design keeps task mutation lead-owned in v1. |
-| Team context should reduce ceremony | After the lead has an active team, follow-up actions should rely on current team context as much as possible | **Not aligned yet**. We still require explicit `team_name` on the task/team tools everywhere. |
-| Common team names should not create awkward friction | If a name collides, the experience should remain smooth | **Not aligned yet**. We currently hard-fail on team-name reuse instead of smoothing collisions. |
-| Visibility tooling should feel supportive, not mandatory | `/team`, `/workers`, task listing, etc. are useful, but not the main coordination loop | **Mostly aligned**. Support tooling exists, but we should be careful not to over-teach it as the primary mode. |
+| Creating a team should feel like starting a collaborative mode, not entering a separate admin product | Team creation is first-class, and teammate work feels like normal collaborative delegation inside that team | **Aligned**. The public contract is team-first, while low-level worker tools are explicitly secondary plumbing. |
+| Once teammates are launched, they report back automatically | The lead should receive teammate progress/completion without manual polling | **Aligned**. Notifications are the primary return path. |
+| The lead should not need to babysit status checks | Inspection commands may exist, but the default loop is notification-first | **Aligned**. Prompt, README, installer text, and builtin prompts now teach notifications first and inspection second. |
+| If a teammate already has useful context, continuing them should feel normal | Idle/waiting teammates are still naturally addressable; context reuse is a first-class behavior | **Aligned**. `send_message` continues running teammates and resumes idle teammates when a saved session exists. |
+| The team should share a living task board | Tasks are collaborative coordination state, not just lead bookkeeping | **Aligned**. `task_update` is shared board state, with teammate-safe ownership/completion mutation enforced in code and tests. |
+| Team context should reduce ceremony | After the lead has an active team, follow-up actions should rely on current team context as much as possible | **Aligned**. Normal follow-up flows resolve against current team context by default. |
+| Common team names should not create awkward friction | If a name collides, the experience should remain smooth | **Aligned**. Common collisions now get safe fallback names instead of hard-failing. |
+| Visibility tooling should feel supportive, not mandatory | `/team`, `/workers`, task listing, etc. are useful, but not the main coordination loop | **Aligned**. Support tooling exists, but the prompt/docs canon teaches notification-first coordination. |
 
 ### What “done” means from the user perspective
 
@@ -143,12 +147,12 @@ This is the checklist we should now use when evaluating the current implementati
 - [x] Shared task persistence exists.
 - [x] Team visibility commands exist as supporting UX.
 
-#### Not yet aligned, still divergent from the reference UX
-- [ ] **Task coordination is lead-owned in our current design**, while the reference UX treats the task list as shared mutable coordination state for teammates too.
-- [ ] **Our `send_message` contract is stricter than the reference UX**. We currently document running-only continuation, while the reference UX treats idle teammates as normal and still addressable.
-- [ ] **Our lead currently checks teammates explicitly** (`check_teammate`) more than the reference UX expects. The reference loop is notification-first, inspection-second.
-- [ ] **Our team-name behavior is rougher than the reference UX**. We currently hard-fail on name reuse; the reference UX smooths collisions by generating a unique fallback name.
-- [ ] **Task tools require explicit `team_name` everywhere**. The reference UX uses current team context much more aggressively.
+#### Reference gaps from the study, now completed
+- [x] **Task coordination is shared mutable state now**. Teammates can claim and complete their own tasks safely through `task_update`.
+- [x] **`send_message` now matches the reference continuation model closely enough**. Idle teammates remain addressable when saved session context exists.
+- [x] **The lead no longer needs to poll by default**. Notification-first coordination is the taught and tested public contract.
+- [x] **Team-name behavior is smooth and safe**. Common collisions get safe fallback names.
+- [x] **Current-team context now reduces ceremony**. Normal follow-up flows resolve against the current team when `team_name` is omitted.
 
 #### Launch decision from this study
 
@@ -932,17 +936,15 @@ explicit contract decisions:
 - **`team_status`** remains the low-level advanced worker-status tool.
 - **`team_create` / `spawn_teammate` / `check_teammate` / `team_shutdown`** are the
   first-class Agent Teams surface.
-- **`send_message`** supports **running teammates only** in the lean pass.
-  Resuming completed/stopped teammates is out of scope.
+- **`send_message`** continues running teammates immediately and can resume completed/stopped teammates when a saved session is available.
 - **Teams are session-scoped in behavior**, even though config/tasks are persisted
   on disk for visibility and cleanup.
 - **Exactly one active team is allowed per lead session** in the lean pass.
   Starting a second active team in the same session must fail clearly.
 - **Teammate names must be unique across all active named agents in the session**,
   not just inside the team.
-- **`send_message`** and **`task_stop`** operate on running teammates only.
-- **Task mutation is lead-owned in v1**. Teammates may read assigned tasks and
-  report progress, but the lead is responsible for calling `task_update`.
+- **`task_stop`** operates on running teammates and workers.
+- **Task mutation uses a shared mutable board**. Leads can edit any task. Teammates can safely claim and complete their own tasks through `task_update`, but cannot delete tasks or reassign another teammate's task.
 - **One canonical lifecycle event family must be used end-to-end** for named
   teammate start/completion notifications, registry updates, and status widgets.
 - **Lead and teammate roles must be runtime-distinct**. A spawned teammate must
@@ -966,7 +968,7 @@ be updated in the same change.
 - **`execution.ts`** or spawn metadata path — pass explicit runtime role/team metadata into spawned teammates
 - **`notify.ts`** — listen to the canonical teammate completion event family
 - **`notify-format.ts`** — support `completed|failed|stopped|timed_out` status explicitly
-- **`send-message-tool.ts`** — keep descriptions and failure behavior aligned with running-only teammate continuation
+- **`send-message-tool.ts`** — keep descriptions and failure behavior aligned with teammate continuation and resume semantics
 
 ### Team model
 Keep it minimal:
@@ -1282,7 +1284,8 @@ canonical visibility path.
 - **`test/public-contract.test.ts`** (new or extend existing integration coverage):
   - top-level docs/help/prompts do not mention removed or deferred behavior
   - no top-level docs require `--coordinator`
-  - `send_message` contract is consistently documented as running-only
+  - `send_message` continuation and resume semantics are documented consistently
+  - shared-board `task_update` semantics are documented consistently
 
 ### Effort: 1.5 days
 
@@ -1379,14 +1382,14 @@ The current implementation is now in this state:
   - teammate continuation logic is extracted into a dedicated module
   - teammate lifecycle semantics are centralized in one helper instead of being re-derived ad hoc in multiple places
 
-#### Still not fully reference-aligned
-- [ ] **Shared mutable task board**
-  - teammates still cannot mutate task ownership/completion directly
-  - the task board is still functionally lead-owned for mutation
-- [ ] **Task-board canon cleanup**
-  - prompt/tool behavior is moving in the right direction, but the final canon still needs to shift from lead-owned bookkeeping to true shared mutable coordination state
-- [ ] **Secondary surface alignment**
-  - the main tool surface now treats idle/resumable teammates correctly, but all secondary visibility surfaces should eventually align with the same lifecycle semantics where it materially affects UX
+#### Reference-aligned after Wave C closure
+- [x] **Shared mutable task board**
+  - teammates can mutate task ownership/completion safely within enforced limits
+  - the task board is no longer taught or implemented as lead-only bookkeeping
+- [x] **Task-board canon cleanup**
+  - prompt/tool behavior, docs, installer text, and tests now teach the shared mutable board as canon
+- [x] **Secondary surface alignment**
+  - `/team` now surfaces continuation state consistently with the main teammate lifecycle semantics where it materially affects UX
 
 ### Reference-driven parity work
 
@@ -1440,31 +1443,31 @@ Close the biggest remaining reference gaps first, using Claude Code's actual beh
 Make tasks behave like Claude-style shared coordination state instead of lead-only bookkeeping.
 
 #### C1. Teammate task mutation model
-- [ ] Allow teammates to update task ownership and completion safely
-- [ ] Define exactly which fields teammates may mutate in v2
-- [ ] Add version/conflict handling for teammate-originated task writes
-- [ ] Add regression tests for teammate task mutation
+- [x] Allow teammates to update task ownership and completion safely
+- [x] Define exactly which fields teammates may mutate in v2
+- [x] Add version/conflict handling for teammate-originated task writes
+- [x] Add regression tests for teammate task mutation
 
 #### C2. Shared board visibility
-- [ ] Ensure lead and teammates see the same task state with the same semantics
-- [ ] Make teammate prompts/tools teach the shared-board model
-- [ ] Add regression tests for lead/teammate shared visibility
+- [x] Ensure lead and teammates see the same task state with the same semantics
+- [x] Make teammate prompts/tools teach the shared-board model
+- [x] Add regression tests for lead/teammate shared visibility
 
 #### C3. Ceremony reduction
-- [ ] Remove repeated explicit team naming from common task flows when current team is known
-- [ ] Update task tool schemas/docs/examples accordingly
-- [ ] Add public-contract tests for reduced ceremony
+- [x] Remove repeated explicit team naming from common task flows when current team is known
+- [x] Update task tool schemas/docs/examples accordingly
+- [x] Add public-contract tests for reduced ceremony
 
 #### C4. Canon cleanup
-- [ ] Rewrite prompt/docs/help text so lead-owned task mutation is no longer taught as canon
-- [ ] Re-check README, installer/help, builtin prompts, and tests against the new shared-board contract
+- [x] Rewrite prompt/docs/help text so lead-owned task mutation is no longer taught as canon
+- [x] Re-check README, installer/help, builtin prompts, and tests against the new shared-board contract
 
 **Wave C done when**
-- [ ] The task board behaves like shared mutable team state
-- [ ] Teammates can update task ownership/completion safely
-- [ ] Common follow-up actions do not require repeated explicit team naming when current team context is already known
-- [ ] Teammate/task ownership semantics are clear, enforced, and documented
-- [ ] The user experience feels collaborative, not like manual orchestration bookkeeping
+- [x] The task board behaves like shared mutable team state
+- [x] Teammates can update task ownership/completion safely
+- [x] Common follow-up actions do not require repeated explicit team naming when current team context is already known
+- [x] Teammate/task ownership semantics are clear, enforced, and documented
+- [x] The user experience feels collaborative, not like manual orchestration bookkeeping
 
 ### Nice-to-have performance follow-up, not a launch blocker
 
@@ -1536,19 +1539,18 @@ Reference-parity Wave B                               ✅ substantially implemen
 ├── Smoother team-name behavior
 └── Focused cleanup refactor (continuation + lifecycle semantics)
 
-Reference-parity Wave C                               (~2d)
+Reference-parity Wave C                               ✅ completed
 ├── Shared mutable task ownership/completion
 ├── Shared board visibility for lead + teammates
 ├── Final ceremony reduction on task flows
 └── Final parity re-check against user-perspective checklist
 ```
 
-**Remaining before parity:** complete Wave C, and optionally finish the small secondary-surface lifecycle alignment noted in Wave B3.
+**Remaining before parity:** none for the launch-scope contract in this plan.
 
 **At-a-glance remaining task count**
-- Wave B, 1 partial cleanup item remaining (`B3` secondary-surface consistency)
-- Wave C, 4 focused task groups (`C1` to `C4`)
-- each remaining group is intended to be implementable and reviewable independently
+- No launch-scope parity tasks remain open in this plan
+- Only explicitly deferred non-goals remain deferred
 
 **Parity target:** the user can say
 "Create a team with 3 teammates to review this repo, wait for them, then synthesize"
@@ -1590,9 +1592,9 @@ and the coordinator handles that with the same collaboration feel as Claude Code
 | Aspect | Current (Waves 1-4) | Lean parity target (Waves 5-6) |
 |---|---|---|
 | Lead surface | raw worker delegation | first-class team + teammate tools |
-| Task tracking | implicit in prompts | explicit shared task list, lead-updated in v1 |
+| Task tracking | implicit in prompts | explicit shared mutable task list for lead + teammates |
 | Team concept | none | persisted team config, one active team per lead session |
-| Worker continuation | `send_message` for running workers | same mechanism for running teammates only |
+| Worker continuation | `send_message` for running workers | same mechanism, plus session-backed resume for idle teammates |
 | User prompt style | coordinator-ish | Claude-style "create a team..." |
 
 ---
@@ -1717,8 +1719,8 @@ Explicitly deferred until the lean team/task model proves insufficient:
 - Slash commands unchanged except for optional team visibility additions
 - `name` parameter remains optional for low-level worker usage, but `spawn_teammate` always creates named RPC teammates
 - Existing coordinator/worker flow continues to work as-is underneath the team layer
-- `send_message` and `task_stop` work with standalone workers and with **running** teammates in the lean pass
-- Completed/stopped teammate resume is explicitly out of scope for this pass
+- `send_message` and `task_stop` work with standalone workers and with teammates in the first-class team flow
+- `send_message` can resume completed/stopped teammates when saved session context is available
 - One active team per lead session is an intentional v1 limitation, not a regression
 
 ---

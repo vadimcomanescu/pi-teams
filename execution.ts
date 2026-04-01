@@ -23,6 +23,7 @@ import {
 import {
 	getFinalOutput,
 	findLatestSessionFile,
+	detectFatalProviderError,
 	detectTeamError,
 	extractToolArgsPreview,
 	extractTextFromContent,
@@ -161,6 +162,22 @@ export async function runSync(
 		let buf = "";
 
 		let processClosed = false;
+		let forcedExitCode: number | undefined;
+		let forcedError: string | undefined;
+
+		const failFast = (error: string, exitCode: number = 1) => {
+			if (forcedExitCode !== undefined) return;
+			forcedExitCode = exitCode;
+			forcedError = error;
+			result.error = error;
+			progress.error = error;
+			progress.status = "failed";
+			fireUpdate();
+			proc.kill("SIGTERM");
+			setTimeout(() => {
+				if (!proc.killed) proc.kill("SIGKILL");
+			}, 3000);
+		};
 
 		const fireUpdate = () => {
 			if (!onUpdate || processClosed) return;
@@ -213,7 +230,14 @@ export async function runSync(
 							progress.tokens = result.usage.input + result.usage.output;
 						}
 						if (!result.model && evt.message.model) result.model = evt.message.model;
-						if (evt.message.errorMessage) result.error = evt.message.errorMessage;
+						if (evt.message.errorMessage) {
+							result.error = evt.message.errorMessage;
+							const fatalProviderError = detectFatalProviderError(evt.message.errorMessage);
+							if (fatalProviderError.hasError) {
+								failFast(`Provider hard limit: ${fatalProviderError.details ?? evt.message.errorMessage}`,
+									fatalProviderError.exitCode ?? 1);
+							}
+						}
 
 						const text = extractTextFromContent(evt.message.content);
 						if (text) {
@@ -266,10 +290,13 @@ export async function runSync(
 		proc.on("close", (code) => {
 			processClosed = true;
 			if (buf.trim()) processLine(buf);
+			if (forcedError && !result.error) {
+				result.error = forcedError;
+			}
 			if (code !== 0 && stderrBuf.trim() && !result.error) {
 				result.error = stderrBuf.trim();
 			}
-			resolve(code ?? 0);
+			resolve(forcedExitCode ?? code ?? 0);
 		});
 		proc.on("error", () => resolve(1));
 

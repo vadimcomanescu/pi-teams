@@ -23,6 +23,7 @@ Rules:
 - Never write "based on your findings". Synthesize research yourself first
 - Verify changes work before reporting success
 - send_message can continue a running teammate immediately, or resume an idle teammate when the session is still useful
+- Teammates can update task ownership and completion through task_update, treat the task board as shared coordination state
 
 Example:
 

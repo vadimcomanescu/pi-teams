@@ -146,12 +146,18 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 				? theme.fg("success", "complete")
 				: job.status === "failed"
 					? theme.fg("error", "failed")
-					: theme.fg("warning", "running");
+					: job.status === "stopped"
+						? theme.fg("warning", "stopped")
+						: job.status === "timed_out"
+							? theme.fg("error", "timed_out")
+							: theme.fg("warning", "running");
 
 		const stepsTotal = job.stepsTotal ?? (job.agents?.length ?? 1);
 		const stepIndex = job.currentStep !== undefined ? job.currentStep + 1 : undefined;
 		const stepText = stepIndex !== undefined ? `step ${stepIndex}/${stepsTotal}` : `steps ${stepsTotal}`;
-		const endTime = (job.status === "complete" || job.status === "failed") ? (job.updatedAt ?? Date.now()) : Date.now();
+		const endTime = (job.status === "complete" || job.status === "failed" || job.status === "stopped" || job.status === "timed_out")
+			? (job.updatedAt ?? Date.now())
+			: Date.now();
 		const elapsed = job.startedAt ? formatDuration(endTime - job.startedAt) : "";
 		const agentLabel = job.agents ? job.agents.join(" -> ") : (job.mode ?? "single");
 

@@ -17,7 +17,8 @@ When spawned by the lead:
 - Report specific results: file paths changed, commit hashes, test output
 - If you hit a blocker, report it clearly so the lead can redirect
 - Do not ask clarifying questions, make reasonable decisions and document them
-- Treat task state as lead-owned unless the prompt explicitly gives you permission to mutate it
+- Use task_update to claim or complete tasks that belong to you
+- Do not mutate team lifecycle, delete tasks, or reassign another teammate's task
 
 Work autonomously to complete the assigned task. Use all available tools as needed.
 

@@ -2,6 +2,8 @@ import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { MockPi } from "./helpers.ts";
 import { createMockPi, createTempDir, removeTempDir, tryImport } from "./helpers.ts";
+import { AgentRegistry } from "../agent-registry.js";
+import { TeamManager } from "../team-manager.js";
 
 interface ExecutorModule {
 	createTeamExecutor?: (...args: unknown[]) => {
@@ -86,22 +88,25 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 		removeTempDir(tempDir);
 	});
 
-	function makeExecutor() {
-		return createTeamExecutor({
-			pi: { events: { emit: () => {} } },
-			state: makeState(tempDir),
-			config: {},
-			asyncByDefault: false,
-			tempArtifactsDir: tempDir,
-			getTeamSessionRoot: () => tempDir,
-			expandTilde: (p: string) => p,
-			discoverAgents: () => ({
-				agents: [
-					{ name: "echo", description: "Echo test agent" },
-					{ name: "second", description: "Second test agent" },
-				],
+	function makeExecutor(state = makeState(tempDir)) {
+		return {
+			executor: createTeamExecutor({
+				pi: { events: { emit: () => {} } },
+				state,
+				config: {},
+				asyncByDefault: false,
+				tempArtifactsDir: tempDir,
+				getTeamSessionRoot: () => tempDir,
+				expandTilde: (p: string) => p,
+				discoverAgents: () => ({
+					agents: [
+						{ name: "echo", description: "Echo test agent" },
+						{ name: "second", description: "Second test agent" },
+					],
+				}),
 			}),
-		});
+			state,
+		};
 	}
 
 	function makeCtx(sessionManager: SessionManagerStub) {
@@ -116,7 +121,7 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 
 	it("fails fast when context=fork and parent session is missing", async () => {
 		const { manager } = makeSessionManagerRecorder({ sessionFile: undefined, leafId: "leaf-current" });
-		const executor = makeExecutor();
+		const { executor } = makeExecutor();
 
 		const result = await executor.execute(
 			"id",
@@ -132,7 +137,7 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 
 	it("fails fast when context=fork and leaf is missing", async () => {
 		const { manager } = makeSessionManagerRecorder({ sessionFile: "/tmp/parent.jsonl", leafId: null });
-		const executor = makeExecutor();
+		const { executor } = makeExecutor();
 
 		const result = await executor.execute(
 			"id",
@@ -147,7 +152,7 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 	});
 
 	it("returns a tool error (instead of throwing) when branch creation fails", async () => {
-		const executor = makeExecutor();
+		const { executor } = makeExecutor();
 		const manager = {
 			getSessionFile: () => "/tmp/parent.jsonl",
 			getLeafId: () => "leaf-fail",
@@ -171,7 +176,7 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 
 	it("creates one forked session for single mode", async () => {
 		const { manager, calls } = makeSessionManagerRecorder({ sessionFile: "/tmp/parent.jsonl", leafId: "leaf-123" });
-		const executor = makeExecutor();
+		const { executor } = makeExecutor();
 
 		const result = await executor.execute(
 			"id",
@@ -188,7 +193,7 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 
 	it("creates isolated forked sessions per parallel task", async () => {
 		const { manager, calls } = makeSessionManagerRecorder({ sessionFile: "/tmp/parent.jsonl", leafId: "leaf-777" });
-		const executor = makeExecutor();
+		const { executor } = makeExecutor();
 
 		const result = await executor.execute(
 			"id",
@@ -211,7 +216,7 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 
 	it("creates isolated forked sessions per chain step (including parallel steps)", async () => {
 		const { manager, calls } = makeSessionManagerRecorder({ sessionFile: "/tmp/parent.jsonl", leafId: "leaf-chain" });
-		const executor = makeExecutor();
+		const { executor } = makeExecutor();
 
 		const result = await executor.execute(
 			"id",
@@ -232,5 +237,62 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 		assert.equal(result.isError, undefined);
 		assert.equal(calls.length, 4, "1 sequential + 2 parallel + 1 sequential");
 		assert.deepEqual(calls, ["leaf-chain", "leaf-chain", "leaf-chain", "leaf-chain"]);
+	});
+
+	it("preserves an ephemeral lead session id across calls when no persisted session file exists", async () => {
+		const { manager } = makeSessionManagerRecorder({ sessionFile: undefined });
+		const { executor, state } = makeExecutor();
+
+		const first = await executor.execute(
+			"id-1",
+			{ agent: "echo", task: "first task" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+		assert.equal(first.isError, undefined);
+		const firstSessionId = state.currentSessionId;
+		assert.ok(firstSessionId, "expected executor to establish an ephemeral session id");
+
+		const second = await executor.execute(
+			"id-2",
+			{ agent: "echo", task: "second task" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+		assert.equal(second.isError, undefined);
+		assert.equal(state.currentSessionId, firstSessionId);
+	});
+
+	it("keeps lead ownership stable even if a persisted parent session file appears later", async () => {
+		const state = makeState(tempDir);
+		state.currentSessionId = "session-ephemeral";
+		const registry = new AgentRegistry();
+		const teamManager = new TeamManager({
+			registry,
+			rootDir: tempDir,
+			getCurrentSessionId: () => state.currentSessionId,
+		});
+		teamManager.createTeam({ team_name: "review" });
+
+		const { manager } = makeSessionManagerRecorder({ sessionFile: "/tmp/persisted-parent.jsonl" });
+		const { executor } = makeExecutor(state);
+		const result = await executor.execute(
+			"id-3",
+			{ agent: "echo", task: "task" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+		assert.equal(result.isError, undefined);
+		assert.equal(state.currentSessionId, "session-ephemeral");
+		assert.doesNotThrow(() => teamManager.registerTeammate("review", {
+			name: "architecture",
+			agentId: "worker-1",
+			agentType: "worker",
+			status: "running",
+			cwd: tempDir,
+		}));
 	});
 });

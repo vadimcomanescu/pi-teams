@@ -40,10 +40,15 @@ export interface CheckedTeammate {
 	lifecycle: TeammateLifecycle;
 }
 
+export type TaskMutationActor =
+	| { kind: "lead" }
+	| { kind: "teammate"; name: string };
+
 interface TeamManagerOptions {
 	registry: AgentRegistry;
 	getCurrentSessionId: () => string | null;
 	getCurrentTeammateTeamName?: () => string | null;
+	getCurrentTeammateName?: () => string | null;
 	rootDir?: string;
 	now?: () => number;
 	onMemberStopped?: (member: TeamMember, team: Team, reason?: string) => void;
@@ -223,6 +228,22 @@ export class TeamManager {
 			return team;
 		}
 		return this.assertLeadControl(resolvedTeamName);
+	}
+
+	assertTaskMutationAccess(teamName?: string): { team: Team; actor: TaskMutationActor } {
+		const teammateTeamName = this.options.getCurrentTeammateTeamName?.() ?? null;
+		if (teammateTeamName) {
+			const team = this.assertTeamAccess(teamName);
+			if (team.state !== "active") {
+				throw new Error(`Team "${team.name}" is not active.`);
+			}
+			const teammateName = this.options.getCurrentTeammateName?.() ?? null;
+			if (!teammateName) {
+				throw new Error("Teammate identity is unavailable for task mutation.");
+			}
+			return { team, actor: { kind: "teammate", name: teammateName } };
+		}
+		return { team: this.assertLeadControl(teamName), actor: { kind: "lead" } };
 	}
 
 	bootstrap(): void {

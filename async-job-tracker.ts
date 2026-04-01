@@ -27,7 +27,7 @@ export function createAsyncJobTracker(state: TeamState, asyncDirRoot: string): {
 			}
 
 			for (const job of state.asyncJobs.values()) {
-				if (job.status === "complete" || job.status === "failed") {
+				if (job.status === "complete" || job.status === "failed" || job.status === "stopped" || job.status === "timed_out") {
 					continue;
 				}
 				const status = readStatus(job.asyncDir);
@@ -84,12 +84,18 @@ export function createAsyncJobTracker(state: TeamState, asyncDirRoot: string): {
 	};
 
 	const handleComplete = (data: unknown) => {
-		const result = data as { id?: string; success?: boolean; asyncDir?: string };
+		const result = data as { id?: string; success?: boolean; asyncDir?: string; status?: "completed" | "failed" | "stopped" | "timed_out" };
 		const asyncId = result.id;
 		if (!asyncId) return;
 		const job = state.asyncJobs.get(asyncId);
 		if (job) {
-			job.status = result.success ? "complete" : "failed";
+			job.status = result.status === "completed"
+				? "complete"
+				: result.status === "stopped"
+					? "stopped"
+					: result.status === "timed_out"
+						? "timed_out"
+						: result.success ? "complete" : "failed";
 			job.updatedAt = Date.now();
 			if (result.asyncDir) job.asyncDir = result.asyncDir;
 		}

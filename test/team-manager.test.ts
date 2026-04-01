@@ -15,6 +15,7 @@ describe("TeamManager", () => {
 	let registry: AgentRegistry;
 	let currentSessionId: string;
 	let currentTeammateTeamName: string | null;
+	let currentTeammateName: string | null;
 	let teamManager: TeamManager;
 
 	beforeEach(() => {
@@ -22,11 +23,13 @@ describe("TeamManager", () => {
 		registry = new AgentRegistry();
 		currentSessionId = "session-a";
 		currentTeammateTeamName = null;
+		currentTeammateName = null;
 		teamManager = new TeamManager({
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => currentSessionId,
 			getCurrentTeammateTeamName: () => currentTeammateTeamName,
+			getCurrentTeammateName: () => currentTeammateName,
 		});
 	});
 
@@ -55,6 +58,7 @@ describe("TeamManager", () => {
 			rootDir: tempDir,
 			getCurrentSessionId: () => currentSessionId,
 			getCurrentTeammateTeamName: () => null,
+			getCurrentTeammateName: () => null,
 		});
 		const created = secondManager.createTeam({ team_name: "shared" });
 		assert.equal(created.name, "shared-2");
@@ -85,6 +89,33 @@ describe("TeamManager", () => {
 		currentTeammateTeamName = "review";
 		assert.equal(teamManager.resolveTeamName(), "review");
 		assert.equal(teamManager.assertTeamAccess().name, "review");
+	});
+
+	it("lets a teammate resolve task mutation access for their own team", () => {
+		teamManager.createTeam({ team_name: "review" });
+		currentSessionId = "teammate-session";
+		currentTeammateTeamName = "review";
+		currentTeammateName = "docs";
+		const access = teamManager.assertTaskMutationAccess();
+		assert.equal(access.team.name, "review");
+		assert.equal(access.actor.kind, "teammate");
+		assert.equal(access.actor.name, "docs");
+	});
+
+	it("rejects teammate task mutation when teammate identity is missing", () => {
+		teamManager.createTeam({ team_name: "review" });
+		currentSessionId = "teammate-session";
+		currentTeammateTeamName = "review";
+		assert.throws(() => teamManager.assertTaskMutationAccess(), /Teammate identity is unavailable/);
+	});
+
+	it("rejects teammate task mutation when the team is not active", () => {
+		teamManager.createTeam({ team_name: "review" });
+		teamManager.shutdownTeam("review", "done");
+		currentSessionId = "teammate-session";
+		currentTeammateTeamName = "review";
+		currentTeammateName = "docs";
+		assert.throws(() => teamManager.assertTaskMutationAccess(), /not active/);
 	});
 
 	it("registers and checks a teammate with effective model", () => {
@@ -242,6 +273,7 @@ describe("TeamManager", () => {
 			rootDir: tempDir,
 			getCurrentSessionId: () => currentSessionId,
 			getCurrentTeammateTeamName: () => currentTeammateTeamName,
+			getCurrentTeammateName: () => currentTeammateName,
 		});
 		assert.equal(reloaded.getTeam("review")?.state, "shutdown");
 	});
@@ -254,6 +286,7 @@ describe("TeamManager", () => {
 			rootDir: tempDir,
 			getCurrentSessionId: () => currentSessionId,
 			getCurrentTeammateTeamName: () => null,
+			getCurrentTeammateName: () => null,
 		});
 		reloaded.bootstrap();
 		assert.equal(reloaded.getTeam("review")?.state, "orphaned");

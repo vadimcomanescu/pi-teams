@@ -44,6 +44,7 @@ import {
 import { AgentRegistry } from "./agent-registry.js";
 import {
 	getCoordinatorSettings,
+	getCurrentTeammateName,
 	getCurrentTeammateTeamName,
 	getRuntimeRole,
 	getTeammateSystemPromptBlock,
@@ -250,6 +251,7 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 		registry,
 		getCurrentSessionId: () => state.currentSessionId,
 		getCurrentTeammateTeamName,
+		getCurrentTeammateName,
 		onMemberStopped: (member, team, reason) => {
 			emitTeamCompletion({
 				id: member.agentId,
@@ -488,6 +490,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 	pi.registerTool(createCheckTeammateTool(teamManager));
 	pi.registerTool(createTaskListTool({ teamManager, createTaskStore }));
 	pi.registerTool(createTaskReadTool({ teamManager, createTaskStore }));
+	pi.registerTool(createTaskUpdateTool({ teamManager, createTaskStore }));
 
 	if (isLeadRuntime) {
 		pi.registerTool(createSendMessageTool(registry, {
@@ -525,6 +528,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 					runtimeRole: "teammate",
 					teamMetadata: {
 						teamName: request.teamName,
+						teammateName: request.name,
 						teammateNames: request.teammateNames,
 						assignedTaskIds: request.assignedTaskIds,
 						configPath: request.configPath,
@@ -542,7 +546,6 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		}));
 		pi.registerTool(createTeamShutdownTool(teamManager));
 		pi.registerTool(createTaskCreateTool({ teamManager, createTaskStore }));
-		pi.registerTool(createTaskUpdateTool({ teamManager, createTaskStore }));
 		registerSlashCommands(pi, state, {
 			registry,
 			teamManager,

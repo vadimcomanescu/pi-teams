@@ -1,7 +1,7 @@
 {
   "name": "pi-teams",
-  "version": "0.12.0",
-  "description": "Pi extension for managing teams of agents, shared tasks, and raw worker delegation",
+  "version": "1.0.0",
+  "description": "Pi team orchestration extension for named teammates, shared task boards, and raw worker delegation",
   "author": "Vadim Comanescu",
   "contributors": ["Nico Bailon"],
   "license": "MIT",
@@ -33,6 +33,7 @@
   "files": [
     "*.ts",
     "!*.test.ts",
+    "*.js",
     "*.mjs",
     "agents/",
     "README.md",

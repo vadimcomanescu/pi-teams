@@ -35,6 +35,32 @@ interface TaskToolsDeps {
 	createTaskStore: (teamName: string) => TaskStore;
 }
 
+function normalizeTeammateTaskChanges(
+	actorName: string,
+	existing: { owner?: string; status: string },
+	changes: { status?: TeamTaskStatus; owner?: string },
+): { status?: TeamTaskStatus; owner?: string } {
+	const actorKey = actorName.toLowerCase();
+	const existingOwnerKey = existing.owner?.toLowerCase();
+	const requestedOwnerKey = changes.owner?.toLowerCase();
+
+	if (changes.status === "deleted") {
+		throw new Error("Teammates cannot mark tasks deleted. Ask the lead to delete or retire the task.");
+	}
+	if (requestedOwnerKey !== undefined && requestedOwnerKey !== actorKey) {
+		throw new Error(`Teammates may only assign tasks to themselves. Requested owner: ${changes.owner}`);
+	}
+	if (existingOwnerKey && existingOwnerKey !== actorKey) {
+		throw new Error(`Task is owned by teammate "${existing.owner}". Only that teammate or the lead may update it.`);
+	}
+
+	const next = { ...changes };
+	if (next.owner === undefined && !existing.owner && (next.status === "in_progress" || next.status === "completed")) {
+		next.owner = actorName;
+	}
+	return next;
+}
+
 function toErrorResult(message: string, details?: Record<string, unknown>) {
 	return {
 		content: [{ type: "text" as const, text: message }],
@@ -51,7 +77,7 @@ export function createTaskCreateTool(deps: TaskToolsDeps): ToolDefinition<typeof
 	return {
 		name: "task_create",
 		label: "Task Create",
-		description: "Create a shared task for a team",
+		description: "Create a shared task board item for a team",
 		parameters: TaskCreateParams,
 		async execute(_toolCallId, params) {
 			try {
@@ -75,7 +101,7 @@ export function createTaskListTool(deps: TaskToolsDeps): ToolDefinition<typeof T
 	return {
 		name: "task_list",
 		label: "Task List",
-		description: "List a team's shared tasks",
+		description: "List a team's shared task board items",
 		parameters: TaskListParams,
 		async execute(_toolCallId, params) {
 			try {
@@ -99,7 +125,7 @@ export function createTaskReadTool(deps: TaskToolsDeps): ToolDefinition<typeof T
 	return {
 		name: "task_read",
 		label: "Task Read",
-		description: "Read one shared team task",
+		description: "Read one shared task board item",
 		parameters: TaskReadParams,
 		async execute(_toolCallId, params) {
 			try {
@@ -136,11 +162,11 @@ export function createTaskUpdateTool(deps: TaskToolsDeps): ToolDefinition<typeof
 	return {
 		name: "task_update",
 		label: "Task Update",
-		description: "Update task ownership or status",
+		description: "Update task ownership or status. Leads can edit any task. Teammates can claim and complete their own tasks.",
 		parameters: TaskUpdateParams,
 		async execute(_toolCallId, params) {
 			try {
-				const team = deps.teamManager.assertLeadControl(params.team_name);
+				const { team, actor } = deps.teamManager.assertTaskMutationAccess(params.team_name);
 				const store = deps.createTaskStore(team.name);
 				const existing = store.readTask(params.task_id);
 				if (!existing) {
@@ -149,14 +175,20 @@ export function createTaskUpdateTool(deps: TaskToolsDeps): ToolDefinition<typeof
 				if (params.status === undefined && params.owner === undefined) {
 					return toErrorResult("Provide status and/or owner to update.", { team_name: team.name, task_id: params.task_id });
 				}
-				const updated = store.updateTask(
-					params.task_id,
-					{ status: params.status as TeamTaskStatus | undefined, owner: params.owner },
-					existing.version,
-				);
+				const requestedChanges: { status?: TeamTaskStatus; owner?: string } = {};
+				if (params.status !== undefined) {
+					requestedChanges.status = params.status as TeamTaskStatus;
+				}
+				if (params.owner !== undefined) {
+					requestedChanges.owner = params.owner;
+				}
+				const changes = actor.kind === "teammate"
+					? normalizeTeammateTaskChanges(actor.name, existing, requestedChanges)
+					: requestedChanges;
+				const updated = store.updateTask(params.task_id, changes, existing.version);
 				return {
 					content: [{ type: "text" as const, text: `Updated task ${updated.id}` }],
-					details: { ...updated, team_name: team.name },
+					details: { ...updated, team_name: team.name, updated_by: actor.kind === "teammate" ? actor.name : "lead" },
 				};
 			} catch (error) {
 				return toErrorResult(error instanceof Error ? error.message : String(error), { team_name: params.team_name, task_id: params.task_id });

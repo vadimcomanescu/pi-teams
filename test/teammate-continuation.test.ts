@@ -65,6 +65,7 @@ describe("createResumeAgent", () => {
 			runtimeRole: "teammate",
 			teamMetadata: {
 				teamName: "review",
+				teammateName: "docs",
 				teammateNames: ["docs"],
 				assignedTaskIds: [],
 				configPath: path.join(tempDir, "review", "config.json"),
