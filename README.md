@@ -11,13 +11,13 @@ https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
 ## Installation
 
 ```bash
-pi install npm:pi-teams
+pi install npm:@vadimcomanescu/pi-teams
 ```
 
 To remove:
 
 ```bash
-npx pi-teams --remove
+npx @vadimcomanescu/pi-teams --remove
 ```
 
 ## Team-first workflow

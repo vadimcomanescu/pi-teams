@@ -4,8 +4,8 @@
  * pi-teams installer
  * 
  * Usage:
- *   npx pi-teams          # Install to ~/.pi/agent/extensions/pi-teams
- *   npx pi-teams --remove # Remove the extension
+ *   npx @vadimcomanescu/pi-teams          # Install to ~/.pi/agent/extensions/pi-teams
+ *   npx @vadimcomanescu/pi-teams --remove # Remove the extension
  */
 
 import { execSync } from "node:child_process";
@@ -26,9 +26,9 @@ if (isHelp) {
 pi-teams - Pi team orchestration extension for named teammates, shared task boards, and raw worker delegation
 
 Usage:
-  npx pi-teams          Install the extension
-  npx pi-teams --remove Remove the extension
-  npx pi-teams --help   Show this help
+  npx @vadimcomanescu/pi-teams          Install the extension
+  npx @vadimcomanescu/pi-teams --remove Remove the extension
+  npx @vadimcomanescu/pi-teams --help   Show this help
 
 Lead sessions use the team coordinator prompt by default.
 Installation directory: ${EXTENSION_DIR}
@@ -66,12 +66,12 @@ if (fs.existsSync(EXTENSION_DIR)) {
 			console.log("\n✓ pi-teams updated");
 		} catch (err) {
 			console.error("Failed to update. Try removing and reinstalling:");
-			console.error("  npx pi-teams --remove && npx pi-teams");
+			console.error("  npx @vadimcomanescu/pi-teams --remove && npx @vadimcomanescu/pi-teams");
 			process.exit(1);
 		}
 	} else {
 		console.log(`Directory exists but is not a git repo: ${EXTENSION_DIR}`);
-		console.log("Remove it first with: npx pi-teams --remove");
+		console.log("Remove it first with: npx @vadimcomanescu/pi-teams --remove");
 		process.exit(1);
 	}
 } else {

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-04-01
+
+### Changed
+- npm package is now published under the scoped name `@vadimcomanescu/pi-teams`, because the unscoped `pi-teams` name is already owned on npm.
+- Installation and removal instructions now use the scoped package name while keeping the installed extension directory and binary behavior unchanged.
+
 ## [1.0.0] - 2026-04-01
 
 ### Added

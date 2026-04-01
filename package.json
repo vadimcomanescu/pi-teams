@@ -1,6 +1,6 @@
 {
-  "name": "pi-teams",
-  "version": "1.0.0",
+  "name": "@vadimcomanescu/pi-teams",
+  "version": "1.0.1",
   "description": "Pi team orchestration extension for named teammates, shared task boards, and raw worker delegation",
   "author": "Vadim Comanescu",
   "contributors": ["Nico Bailon"],
