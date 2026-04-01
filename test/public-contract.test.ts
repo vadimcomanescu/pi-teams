@@ -27,7 +27,8 @@ describe("public team-first contract", () => {
 			"/workers",
 			"/stop-all",
 			"default_model",
-			"running-only",
+			"<task-notification>",
+			"omit `team_name`",
 		]) {
 			assert.ok(intro.includes(required), `README intro should include ${required}`);
 		}
@@ -48,10 +49,24 @@ describe("public team-first contract", () => {
 			"task_read",
 			"task_update",
 			"team_status",
+			"<task-notification>",
+			"resolve the current team",
+			"/team [team-name]",
+			"/workers",
+			"/stop-all",
+			"Ctrl+Shift+A",
 		]) {
 			assert.ok(install.includes(required), `installer should include ${required}`);
 		}
 		assert.ok(!install.includes("--coordinator"), "installer should not require a coordinator flag");
+	});
+
+	it("README and slash command keybinding stay consistent for the Agents Manager", () => {
+		const readme = readLocal("README.md");
+		const slashCommands = readLocal("slash-commands.ts");
+		assert.ok(readme.includes("Ctrl+Shift+A"), "README should document Ctrl+Shift+A");
+		assert.ok(slashCommands.includes('registerShortcut("ctrl+shift+a"'), "slash commands should register Ctrl+Shift+A");
+		assert.ok(!slashCommands.includes('registerShortcut("ctrl+shift+t"'), "legacy Ctrl+Shift+T shortcut should not remain");
 	});
 
 	it("package metadata and prompts align with the public contract", () => {
@@ -65,7 +80,9 @@ describe("public team-first contract", () => {
 			assert.ok(prompt.includes(required), `coordinator prompt should include ${required}`);
 			assert.ok(coordinatorAgent.includes(required), `builtin coordinator should include ${required}`);
 		}
-		assert.ok(prompt.includes("running-only"), "coordinator prompt should document running-only send_message");
+		assert.ok(prompt.includes("notifications are the primary coordination loop"), "coordinator prompt should teach notification-first coordination");
+		assert.ok(prompt.includes("resume an idle teammate"), "coordinator prompt should document teammate continuation");
+		assert.ok(!prompt.includes("running-only"), "coordinator prompt should not teach the removed running-only contract");
 		assert.ok(!prompt.includes("--coordinator"), "coordinator prompt should not require a coordinator flag");
 		assert.ok(!coordinatorAgent.includes("--coordinator"), "builtin coordinator should not require a coordinator flag");
 	});

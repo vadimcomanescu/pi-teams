@@ -40,10 +40,10 @@ Lead sessions use the coordinator prompt by default. Start with the first-class 
 |------|--------|
 | `team` | Low-level worker execution for single, chain, and parallel runs |
 | `team_status` | Inspect async raw worker runs |
-| `send_message` | Follow up with a running teammate or worker |
+| `send_message` | Follow up with a running teammate, or resume an idle teammate that still has a session |
 | `task_stop` | Stop a running teammate or worker |
 
-> `send_message` is running-only. It does not resume completed or stopped work.
+> After `team_create`, follow-up team and task tools can omit `team_name`. They resolve against the current team automatically.
 
 ### User says
 
@@ -65,7 +65,6 @@ team_create({
 })
 
 spawn_teammate({
-  team_name: "repo-review",
   name: "architecture",
   prompt: "Review repository architecture and identify structural risks.",
   cwd: "/home/vadim/Code/pi-teams",
@@ -73,7 +72,6 @@ spawn_teammate({
 })
 
 spawn_teammate({
-  team_name: "repo-review",
   name: "testing",
   prompt: "Review tests, missing coverage, and regression risks.",
   cwd: "/home/vadim/Code/pi-teams",
@@ -81,7 +79,6 @@ spawn_teammate({
 })
 
 spawn_teammate({
-  team_name: "repo-review",
   name: "docs",
   prompt: "Review docs drift, README accuracy, and user contract clarity.",
   cwd: "/home/vadim/Code/pi-teams",
@@ -89,28 +86,23 @@ spawn_teammate({
 })
 
 task_create({
-  team_name: "repo-review",
   subject: "Architecture review",
   description: "Assess boundaries, naming, and rollout risks."
 })
 
 task_create({
-  team_name: "repo-review",
   subject: "Testing review",
   description: "Find missing tests, weak assertions, and integration gaps."
 })
 
 task_create({
-  team_name: "repo-review",
   subject: "Docs review",
   description: "Check README/help/install output against the real tool surface."
 })
 
-check_teammate({ team_name: "repo-review", agent_name: "architecture" })
-check_teammate({ team_name: "repo-review", agent_name: "testing" })
-check_teammate({ team_name: "repo-review", agent_name: "docs" })
-
-// Wait for teammates to finish, then synthesize their results for the user.
+// Wait for teammate notifications. Completions arrive automatically as
+// <task-notification> XML blocks. Use check_teammate only if something looks
+// stuck, or if you want an explicit status snapshot before synthesizing.
 ```
 
 ### Operator command
@@ -126,10 +118,10 @@ Use `default_model` on `team_create` for the team-wide fallback. Override `model
 If you want pure tool visibility instead of slash commands, use:
 
 ```ts
-task_list({ team_name: "repo-review" })
-check_teammate({ team_name: "repo-review", agent_name: "architecture" })
-check_teammate({ team_name: "repo-review", agent_name: "testing" })
-check_teammate({ team_name: "repo-review", agent_name: "docs" })
+task_list()
+check_teammate({ agent_name: "architecture" })
+check_teammate({ agent_name: "testing" })
+check_teammate({ agent_name: "docs" })
 ```
 
 ### Prompt-template delegation (advanced)

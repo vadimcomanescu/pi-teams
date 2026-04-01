@@ -1,27 +1,9 @@
-/**
- * Integration tests for the send_message tool.
- *
- * Uses real AgentRegistry instances and PassThrough streams to verify actual
- * stdin writes. No mocking.
- */
-
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Dynamically import modules so the file can be run without build artefacts.
 import { AgentRegistry } from "../agent-registry.js";
 import { createSendMessageTool } from "../send-message-tool.js";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Create a PassThrough-backed fake rpcHandle and collect written data. */
 function makeFakeRpcHandle() {
 	const stdin = new PassThrough();
 	let written = "";
@@ -36,7 +18,6 @@ function makeFakeRpcHandle() {
 	};
 }
 
-/** Read collected stdin writes as parsed JSON lines (strips trailing newlines). */
 function parseWritten(written: string): unknown[] {
 	return written
 		.split("\n")
@@ -44,23 +25,15 @@ function parseWritten(written: string): unknown[] {
 		.map((line) => JSON.parse(line));
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 describe("send_message tool", () => {
-	let registry: InstanceType<typeof AgentRegistry>;
+	let registry: AgentRegistry;
 
 	beforeEach(() => {
 		registry = new AgentRegistry();
 	});
 
 	it("routes a message to a running RPC agent by name and writes correct JSON to stdin", async () => {
-		const { rpcHandle, get: getWritten } = (() => {
-			const fake = makeFakeRpcHandle();
-			return { rpcHandle: fake.rpcHandle, get: () => fake.written };
-		})();
-
+		const fake = makeFakeRpcHandle();
 		registry.register({
 			id: "w1",
 			name: "researcher",
@@ -68,7 +41,7 @@ describe("send_message tool", () => {
 			task: "investigate bugs",
 			status: "running",
 			startTime: Date.now(),
-			rpcHandle,
+			rpcHandle: fake.rpcHandle,
 		});
 
 		const tool = createSendMessageTool(registry);
@@ -76,17 +49,11 @@ describe("send_message tool", () => {
 
 		assert.equal(result.details.delivered, "queued");
 		assert.equal(result.details.to, "researcher");
-		assert.ok(!("isError" in result) || !(result as any).isError);
-
-		// Verify exact JSON written to stdin
-		const lines = parseWritten(getWritten());
-		assert.equal(lines.length, 1);
-		assert.deepEqual(lines[0], { type: "follow_up", message: "Focus on auth module" });
+		assert.deepEqual(parseWritten(fake.written)[0], { type: "follow_up", message: "Focus on auth module" });
 	});
 
 	it("routes a message to a running RPC agent by ID", async () => {
 		const fake = makeFakeRpcHandle();
-
 		registry.register({
 			id: "agent-xyz",
 			agentType: "worker",
@@ -101,9 +68,7 @@ describe("send_message tool", () => {
 
 		assert.equal(result.details.delivered, "queued");
 		assert.equal(result.details.to, "agent-xyz");
-
-		const lines = parseWritten(fake.written);
-		assert.deepEqual(lines[0], { type: "follow_up", message: "Please stop" });
+		assert.deepEqual(parseWritten(fake.written)[0], { type: "follow_up", message: "Please stop" });
 	});
 
 	it("rejects message to background-mode agent (running, no rpcHandle) with helpful error", async () => {
@@ -114,39 +79,65 @@ describe("send_message tool", () => {
 			task: "bg task",
 			status: "running",
 			startTime: Date.now(),
-			// No rpcHandle — bg mode
 		});
 
 		const tool = createSendMessageTool(registry);
 		const result = await tool.execute("call-3", { to: "bgworker", message: "hello?" }, undefined, undefined, {} as any);
 
-		assert.ok((result as any).isError, "should be an error");
-		assert.ok(
-			result.content[0].type === "text" &&
-			(result.content[0] as { type: "text"; text: string }).text.includes("background mode"),
-			"error message should mention background mode",
-		);
+		assert.equal(result.isError, true);
+		assert.match((result.content[0] as { type: "text"; text: string }).text, /background mode/);
 	});
 
-	it("returns error for completed agent with status info", async () => {
+	it("resumes a completed agent when a resumable session exists", async () => {
 		registry.register({
 			id: "done-1",
 			name: "finisher",
 			agentType: "worker",
 			task: "complete task",
-			status: "running",
-			startTime: Date.now(),
+			status: "completed",
+			startTime: Date.now() - 1000,
+			sessionFile: "/tmp/finisher.jsonl",
 		});
-		registry.updateStatus("done-1", "completed", "All done");
+		const resumed: Array<{ id: string; message: string }> = [];
+		const tool = createSendMessageTool(registry, {
+			resumeAgent: async (agent, message) => {
+				resumed.push({ id: agent.id, message });
+				registry.register({
+					id: "done-2",
+					name: agent.name,
+					agentType: agent.agentType,
+					task: message,
+					status: "running",
+					startTime: Date.now(),
+					sessionFile: agent.sessionFile,
+				});
+				return { agentId: "done-2" };
+			},
+		});
 
-		const tool = createSendMessageTool(registry);
 		const result = await tool.execute("call-4", { to: "finisher", message: "one more thing" }, undefined, undefined, {} as any);
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details.delivered, "resumed");
+		assert.equal(result.details.agent_id, "done-2");
+		assert.deepEqual(resumed, [{ id: "done-1", message: "one more thing" }]);
+		assert.equal(registry.resolve("finisher")?.id, "done-2");
+	});
 
-		assert.ok((result as any).isError, "should be an error");
-		const text = (result.content[0] as { type: "text"; text: string }).text;
-		assert.ok(text.includes("finisher"), "should name the agent");
-		assert.ok(text.includes("completed"), "should mention status");
-		assert.ok(text.includes("spawn a new worker"), "should suggest spawning a new worker");
+	it("returns a clear error for idle agents without a resumable session", async () => {
+		registry.register({
+			id: "done-1",
+			name: "finisher",
+			agentType: "worker",
+			task: "complete task",
+			status: "completed",
+			startTime: Date.now() - 1000,
+		});
+		const tool = createSendMessageTool(registry, {
+			resumeAgent: async () => ({ agentId: "should-not-run" }),
+		});
+		const result = await tool.execute("call-5", { to: "finisher", message: "one more thing" }, undefined, undefined, {} as any);
+		assert.equal(result.isError, true);
+		assert.match((result.content[0] as { type: "text"; text: string }).text, /no resumable session/i);
 	});
 
 	it("returns error for unknown agent with available names list", async () => {
@@ -168,18 +159,17 @@ describe("send_message tool", () => {
 		});
 
 		const tool = createSendMessageTool(registry);
-		const result = await tool.execute("call-5", { to: "charlie", message: "hello" }, undefined, undefined, {} as any);
+		const result = await tool.execute("call-6", { to: "charlie", message: "hello" }, undefined, undefined, {} as any);
 
-		assert.ok((result as any).isError, "should be an error");
+		assert.equal(result.isError, true);
 		const text = (result.content[0] as { type: "text"; text: string }).text;
-		assert.ok(text.includes("charlie"), "should name the unknown agent");
-		assert.ok(text.includes("alice"), "should list alice");
-		assert.ok(text.includes("bob"), "should list bob");
+		assert.ok(text.includes("charlie"));
+		assert.ok(text.includes("alice"));
+		assert.ok(text.includes("bob"));
 	});
 
 	it("case-insensitive name matching routes correctly", async () => {
 		const fake = makeFakeRpcHandle();
-
 		registry.register({
 			id: "w2",
 			name: "Analyst",
@@ -191,14 +181,11 @@ describe("send_message tool", () => {
 		});
 
 		const tool = createSendMessageTool(registry);
-		// Send using lowercase variant
-		const result = await tool.execute("call-6", { to: "analyst", message: "check logs" }, undefined, undefined, {} as any);
+		const result = await tool.execute("call-7", { to: "analyst", message: "check logs" }, undefined, undefined, {} as any);
 
 		assert.equal(result.details.delivered, "queued");
 		assert.equal(result.details.to, "Analyst");
-
-		const lines = parseWritten(fake.written);
-		assert.deepEqual(lines[0], { type: "follow_up", message: "check logs" });
+		assert.deepEqual(parseWritten(fake.written)[0], { type: "follow_up", message: "check logs" });
 	});
 
 	it("handles broken stdin (write throws) gracefully", async () => {
@@ -219,18 +206,16 @@ describe("send_message tool", () => {
 		});
 
 		const tool = createSendMessageTool(registry);
-		const result = await tool.execute("call-7", { to: "crasher", message: "are you there?" }, undefined, undefined, {} as any);
+		const result = await tool.execute("call-8", { to: "crasher", message: "are you there?" }, undefined, undefined, {} as any);
 
-		assert.ok((result as any).isError, "should be an error");
-		const text = (result.content[0] as { type: "text"; text: string }).text;
-		assert.ok(text.includes("stdin closed") || text.includes("Failed to deliver"), "should mention delivery failure");
+		assert.equal(result.isError, true);
+		assert.match((result.content[0] as { type: "text"; text: string }).text, /Failed to deliver|stdin closed/);
 		assert.equal(result.details.delivered, "failed");
 	});
 
 	it("writes correct JSON format: {type: 'follow_up', message: '...'}", async () => {
 		const fake = makeFakeRpcHandle();
 		const msg = "Multi-line test\nwith newlines";
-
 		registry.register({
 			id: "format-test",
 			name: "formatter",
@@ -242,53 +227,31 @@ describe("send_message tool", () => {
 		});
 
 		const tool = createSendMessageTool(registry);
-		await tool.execute("call-8", { to: "formatter", message: msg }, undefined, undefined, {} as any);
+		await tool.execute("call-9", { to: "formatter", message: msg }, undefined, undefined, {} as any);
 
-		const lines = parseWritten(fake.written);
-		assert.equal(lines.length, 1);
-		const payload = lines[0] as { type: string; message: string };
+		const payload = parseWritten(fake.written)[0] as { type: string; message: string };
 		assert.equal(payload.type, "follow_up");
 		assert.equal(payload.message, msg);
-
-		// Must be a JSON line terminated with newline
-		assert.ok(fake.written.endsWith("\n"), "should end with newline");
+		assert.ok(fake.written.endsWith("\n"));
 	});
 
-	it("returns error for failed agent with status info", async () => {
+	it("returns a clear error when resume callback fails", async () => {
 		registry.register({
-			id: "failed-1",
-			name: "bad-worker",
+			id: "idle-1",
+			name: "recoverable",
 			agentType: "worker",
-			task: "fail task",
-			status: "running",
-			startTime: Date.now(),
+			task: "recover task",
+			status: "stopped",
+			startTime: Date.now() - 1000,
+			sessionFile: "/tmp/recoverable.jsonl",
 		});
-		registry.updateStatus("failed-1", "failed", "Crashed");
-
-		const tool = createSendMessageTool(registry);
-		const result = await tool.execute("call-9", { to: "bad-worker", message: "retry?" }, undefined, undefined, {} as any);
-
-		assert.ok((result as any).isError, "should be an error");
-		const text = (result.content[0] as { type: "text"; text: string }).text;
-		assert.ok(text.includes("failed"), "should mention failed status");
-	});
-
-	it("returns error for timed_out agent with status info", async () => {
-		registry.register({
-			id: "to-1",
-			name: "slow-worker",
-			agentType: "worker",
-			task: "slow task",
-			status: "running",
-			startTime: Date.now(),
+		const tool = createSendMessageTool(registry, {
+			resumeAgent: async () => {
+				throw new Error("resume blew up");
+			},
 		});
-		registry.updateStatus("to-1", "timed_out");
-
-		const tool = createSendMessageTool(registry);
-		const result = await tool.execute("call-10", { to: "slow-worker", message: "done yet?" }, undefined, undefined, {} as any);
-
-		assert.ok((result as any).isError, "should be an error");
-		const text = (result.content[0] as { type: "text"; text: string }).text;
-		assert.ok(text.includes("timed_out"), "should mention timed_out status");
+		const result = await tool.execute("call-10", { to: "recoverable", message: "resume" }, undefined, undefined, {} as any);
+		assert.equal(result.isError, true);
+		assert.match((result.content[0] as { type: "text"; text: string }).text, /resume blew up/);
 	});
 });

@@ -94,8 +94,8 @@ This is the practical checklist for deciding whether the user experience matches
 | User expectation | Claude-style target behavior | Current pi-teams status |
 |---|---|---|
 | I can just ask for a team in natural language | The coordinator naturally maps that request into team creation, teammate spawning, shared tasks, waiting, and synthesis | **Mostly aligned**. Prompt + README now teach this flow clearly. |
-| I do not need to know internal tool syntax | The user talks naturally, the lead handles orchestration internally | **Aligned** at the prompt/docs layer. This is the intended contract. |
-| Creating a team should feel like starting a collaborative mode, not entering a separate admin product | Team creation is first-class, but teammate work still feels like normal agent delegation inside that team | **Not aligned yet**. Our internal surface still splits team management (`team_create`, `spawn_teammate`) from raw worker delegation more than the reference UX. |
+| I do not need to know internal tool syntax | The user talks naturally, the lead handles orchestration internally | **Aligned**. This is the canonical human-facing contract. |
+| Creating a team should feel like starting a collaborative mode, not entering a separate admin product | Team creation is first-class, and teammate work feels like normal collaborative delegation inside that team | **Partially aligned**. This is mostly a coordinator-behavior concern now, not a requirement that internal tool names match the reference exactly. |
 | Once teammates are launched, they report back automatically | The lead should receive teammate progress/completion without manual polling | **Aligned enough**. Notifications exist and are the primary return path. |
 | The lead should not need to babysit status checks | Inspection commands may exist, but the default loop is notification-first | **Partially aligned**. We have automatic notifications, but the current design and docs still lean on explicit `check_teammate` / `/team` more than the reference UX. |
 | If a teammate already has useful context, continuing them should feel normal | Idle/waiting teammates are still naturally addressable; context reuse is a first-class behavior | **Not aligned yet**. Our current documented contract makes `send_message` running-only, which is stricter than the reference UX. |
@@ -144,19 +144,27 @@ This is the checklist we should now use when evaluating the current implementati
 - [x] Team visibility commands exist as supporting UX.
 
 #### Not yet aligned, still divergent from the reference UX
-- [ ] **Teammate spawning is still a separate API family** (`spawn_teammate`) instead of feeling like the normal worker tool with team context.
 - [ ] **Task coordination is lead-owned in our current design**, while the reference UX treats the task list as shared mutable coordination state for teammates too.
 - [ ] **Our `send_message` contract is stricter than the reference UX**. We currently document running-only continuation, while the reference UX treats idle teammates as normal and still addressable.
 - [ ] **Our lead currently checks teammates explicitly** (`check_teammate`) more than the reference UX expects. The reference loop is notification-first, inspection-second.
 - [ ] **Our team-name behavior is rougher than the reference UX**. We currently hard-fail on name reuse; the reference UX smooths collisions by generating a unique fallback name.
 - [ ] **Task tools require explicit `team_name` everywhere**. The reference UX uses current team context much more aggressively.
 
-#### Product decision implied by this study
+#### Launch decision from this study
 
-If we want the same UX as Claude Code Agent Teams, we should treat the current Wave 5 API as **provisional plumbing**, not final public canon. The target canon is:
-- team creation as a first-class act
-- teammate spawning that feels like the normal worker/agent tool in team context
-- shared tasks as a real collaborative board
+For launch, the **human-facing contract is final now**:
+- the user talks in natural language
+- the coordinator handles team orchestration internally
+- the user does **not** need to know any internal tool syntax
+- automatic teammate updates are the primary feedback loop
+- explicit visibility commands are secondary support tools
+
+Internal lead tools may differ from Claude Code's exact internal surface as long as they do not leak into the human-facing experience. We do **not** need tool-name parity for its own sake. We need behavioral parity where the user can naturally request collaborative work and get the same feel.
+
+That means the launch canon is:
+- team creation as a first-class act in the coordinator's behavior
+- teammate work that feels like normal collaborative delegation
+- shared tasks that support team coordination
 - automatic teammate updates as the primary feedback loop
 - explicit inspection commands as secondary support tools
 
@@ -1282,66 +1290,187 @@ canonical visibility path.
 
 ## Post-Wave 6: Claude-style parity waves
 
-Wave 5 and Wave 6 gave us a working first pass, but they should now be treated as
-**provisional plumbing plus first-pass UX**, not final canon. The remaining work
-should be organized around user experience parity, not around preserving the
-current internal API shape.
+Wave 5 and Wave 6 gave us a working first pass. The human-facing contract is now
+frozen for launch: natural-language team requests, coordinator-managed orchestration,
+automatic teammate updates, and visibility tooling as support rather than ceremony.
 
-### Parity Wave A: Canonical interaction model + public contract (~1 day)
+**Historical note:** the detailed Wave 5 and Wave 6 sections below remain useful as
+implementation history, but when they conflict with this launch-freeze section,
+this section wins.
+
+### Launch freeze, completed in this plan
+
+The following product decisions are now fixed unless we explicitly revise them later:
+- Human users should interact through natural language, not internal tool syntax.
+- The coordinator prompt is the primary mechanism that creates the Claude-style experience.
+- Internal tool shape may differ from the reference implementation, as long as the human-facing experience matches.
+- `/team`, `/workers`, `check_teammate`, and similar visibility affordances are supportive, not the main loop.
+- The parity bar is user experience and coordinator behavior, not literal internal API identity.
+
+### Direct reference correction from Claude Code source
+
+After re-reading the actual reference implementation (`src/coordinator/coordinatorMode.ts` and `src/tools/AgentTool/AgentTool.tsx` in `claude-code-original`), several earlier "acceptable divergences" are no longer acceptable. The reference wins.
+
+The canon is now:
+- `team_name` should use current team context when omitted.
+- `send_message` should continue an existing teammate/worker, not just a currently running one.
+- stopped or completed teammates remain naturally addressable when context reuse is valuable.
+- the task board is shared mutable coordination state, not lead-only bookkeeping.
+- teammate spawning should feel like the normal worker surface with team context attached, not a separate admin product.
+- automatic teammate updates are primary, explicit inspection is secondary.
+- smooth team-name behavior matters, hard-failing common names is still a parity gap.
+
+If any earlier section in this plan says otherwise, this section wins.
+
+### Launch blockers, now completed
+
+These correctness and trust blockers are done and covered by tests:
+
+- [x] **Team-name path safety**
+  - Reject unsafe team names like `.` and `..`
+  - Enforce resolved paths stay inside the teams root
+  - Add regression tests
+- [x] **Lifecycle race safety**
+  - A stopped or timed-out teammate must not later regress to `failed` or another misleading terminal state due to late process completion
+  - Add regression tests for stop/timeout vs late exit
+- [x] **Lead/session ownership correctness**
+  - Team ownership must remain stable even when no persisted parent session exists
+  - Spawning and teammate registration must not orphan work on ownership mismatch
+- [x] **Public contract drift cleanup**
+  - Fix remaining user-facing doc/UI drift found in review
+  - Verify keybinding/help consistency (`Ctrl+Shift+A`)
+
+### Completed status, what is already done
+
+These items are implemented and should be treated as the current baseline:
+
+- [x] Coordinator/worker architecture exists and is wired through the extension.
+- [x] Team-first public surface exists: `team_create`, `spawn_teammate`, `check_teammate`, `team_shutdown`.
+- [x] Shared task persistence exists: `task_create`, `task_list`, `task_read`, `task_update`.
+- [x] RPC teammate spawning exists with named teammates and follow-up stdin channel.
+- [x] Automatic teammate completion notifications exist.
+- [x] Low-level control tools exist: `team`, `send_message`, `task_stop`, `team_status`.
+- [x] Team-name path safety is fixed and tested.
+- [x] Lifecycle race safety is fixed in registry/team state and tested.
+- [x] Lead/session ownership stability is fixed for the launch-blocker path and tested.
+- [x] Public contract drift found in review is fixed for the current docs/help/shortcut surface and tested.
+
+### Current parity status
+
+The current implementation is now in this state:
+
+#### Done now
+- [x] **Current-team context by default**
+  - `team_name` is optional on the normal public team/task follow-up tools
+  - omitted `team_name` resolves against current lead-team context or teammate runtime metadata
+  - regression tests cover lead and teammate current-team resolution
+- [x] **Continuation semantics are session-backed now**
+  - `send_message` continues running teammates through the live RPC stdin channel
+  - completed/stopped teammates with a saved pi session can be resumed through a fresh RPC worker
+  - teammate name/addressability is preserved across continuation
+  - docs/prompt copy no longer teaches running-only continuation as canon
+- [x] **Notification-first public contract**
+  - coordinator prompt, README, installer/help text, and builtin coordinator now teach notification-first coordination
+  - `check_teammate` is now positioned as explicit inspection, not the primary loop
+- [x] **Smooth team-name behavior**
+  - common team-name collisions now get safe fallback names instead of hard-failing
+  - path-safety guarantees remain intact
+- [x] **Focused cleanup refactor after Wave B work**
+  - teammate continuation logic is extracted into a dedicated module
+  - teammate lifecycle semantics are centralized in one helper instead of being re-derived ad hoc in multiple places
+
+#### Still not fully reference-aligned
+- [ ] **Shared mutable task board**
+  - teammates still cannot mutate task ownership/completion directly
+  - the task board is still functionally lead-owned for mutation
+- [ ] **Task-board canon cleanup**
+  - prompt/tool behavior is moving in the right direction, but the final canon still needs to shift from lead-owned bookkeeping to true shared mutable coordination state
+- [ ] **Secondary surface alignment**
+  - the main tool surface now treats idle/resumable teammates correctly, but all secondary visibility surfaces should eventually align with the same lifecycle semantics where it materially affects UX
+
+### Reference-driven parity work
+
+### Parity Wave B: Current-team context + continuation semantics (~2 days)
 
 **Purpose**
-Freeze what the user experience should be, based on the reference behavior.
-This wave is about deciding the contract before changing more runtime logic.
+Close the biggest remaining reference gaps first, using Claude Code's actual behavior as the source of truth.
 
-**Decisions to make and record in the plan/docs/tests**
-- Is teammate spawning still a separate public tool family, or should it be taught as normal worker delegation inside team context?
-- Should active team context remove the need to pass `team_name` on every follow-up action?
-- Are `check_teammate` and `/team` primary coordination surfaces, or explicitly secondary visibility tools?
-- Is `send_message` allowed for idle teammates, or only actively running ones?
-- Should team name collisions smooth to a unique fallback, matching the reference UX?
+#### B1. Current-team context resolution
+- [x] Add a single canonical "current team" resolver
+- [x] Make `team_name` optional on `spawn_teammate`, `check_teammate`, `team_shutdown`, `task_create`, `task_list`, `task_read`, `task_update`
+- [x] In lead sessions, omitted `team_name` resolves to the active team
+- [x] In teammate sessions, omitted `team_name` resolves to the teammate's own team
+- [x] Add regression tests for lead current-team resolution
+- [x] Add regression tests for teammate current-team resolution
 
-**Acceptance criteria**
-- [ ] One canonical user interaction model is written down with no contradictions across plan, README, prompt, and tests
-- [ ] The plan explicitly marks which current Wave 5 APIs are canonical vs provisional plumbing
-- [ ] A user-perspective checklist exists and is used as the review bar
-- [ ] No docs accidentally teach a coordinator workflow we intend to remove
+#### B2. Continuation semantics from the reference
+- [x] Rework `send_message` so it can continue an existing teammate, not just a currently running one
+- [x] Decide and implement the concrete continuation path for completed/stopped teammates using the existing session/runtime machinery
+- [x] Preserve teammate identity/addressability across continuation
+- [x] Add regression tests for running continuation
+- [x] Add regression tests for stopped/completed continuation
+- [x] Remove any docs/prompt copy that still teaches running-only as canon
 
-### Parity Wave B: Runtime semantics and teammate lifecycle (~2 days)
+#### B3. Idle/completed/stopped teammate semantics
+- [x] Define teammate states so idle/completed/stopped are not treated as conceptual failure
+- [~] Make `check_teammate`, notifications, and status rendering use those semantics consistently
+- [x] Add regression tests for state transitions and user-visible status wording
+
+#### B4. Notification-first loop
+- [x] Reduce coordinator prompt reliance on explicit `check_teammate` polling
+- [x] Make sure automatic teammate updates are enough for normal coordination flow
+- [x] Update docs/examples so inspection commands are clearly secondary
+- [x] Add prompt/contract tests for notification-first guidance
+
+#### B5. Smooth team-name behavior
+- [x] Replace hard-fail-on-common-collision behavior with safe, smooth reference-aligned naming behavior
+- [x] Keep path-safety guarantees intact while smoothing collisions
+- [x] Add regression tests for name collision behavior
+
+**Wave B done when**
+- [x] `team_name` is optional in normal follow-up flows
+- [x] `send_message` continues useful existing teammates
+- [x] idle/completed/stopped teammates feel normal and addressable on the main tool surface
+- [x] the coordinator can rely on notifications first, inspection second
+- [x] team-name behavior feels smooth and safe
+
+### Parity Wave C: Shared mutable task board (~2 days)
 
 **Purpose**
-Make the coordinator behave like the intended collaboration model, not just
-sound like it in the docs.
+Make tasks behave like Claude-style shared coordination state instead of lead-only bookkeeping.
 
-**Focus**
-- Teammate continuation semantics (`send_message`, idle vs running, stop vs resume)
-- Notification-first loop, explicit inspection second
-- Team lifecycle correctness (stop, timeout, shutdown, late exits)
-- Lead/session ownership correctness
-- Smooth team-name handling
+#### C1. Teammate task mutation model
+- [ ] Allow teammates to update task ownership and completion safely
+- [ ] Define exactly which fields teammates may mutate in v2
+- [ ] Add version/conflict handling for teammate-originated task writes
+- [ ] Add regression tests for teammate task mutation
 
-**Acceptance criteria**
-- [ ] Continuing a teammate with useful loaded context feels natural and predictable
-- [ ] Idle is not treated like failure
-- [ ] Automatic teammate updates are the primary coordination loop
-- [ ] Team stop/timeout/shutdown semantics are race-safe and user-legible
-- [ ] Team creation/reuse behavior is smooth and reference-aligned
+#### C2. Shared board visibility
+- [ ] Ensure lead and teammates see the same task state with the same semantics
+- [ ] Make teammate prompts/tools teach the shared-board model
+- [ ] Add regression tests for lead/teammate shared visibility
 
-### Parity Wave C: Shared task board + current-team context (~2 days)
+#### C3. Ceremony reduction
+- [ ] Remove repeated explicit team naming from common task flows when current team is known
+- [ ] Update task tool schemas/docs/examples accordingly
+- [ ] Add public-contract tests for reduced ceremony
 
-**Purpose**
-Make tasks feel like shared team coordination state instead of lead-only bookkeeping.
+#### C4. Canon cleanup
+- [ ] Rewrite prompt/docs/help text so lead-owned task mutation is no longer taught as canon
+- [ ] Re-check README, installer/help, builtin prompts, and tests against the new shared-board contract
 
-**Focus**
-- Decide and implement whether teammates can mutate task ownership/completion
-- Reduce explicit `team_name` ceremony where current team context exists
-- Make task flow feel like one shared board
-- Ensure lead and teammates see the same coordination state
-
-**Acceptance criteria**
-- [ ] The task board behaves like shared team state
+**Wave C done when**
+- [ ] The task board behaves like shared mutable team state
+- [ ] Teammates can update task ownership/completion safely
 - [ ] Common follow-up actions do not require repeated explicit team naming when current team context is already known
 - [ ] Teammate/task ownership semantics are clear, enforced, and documented
 - [ ] The user experience feels collaborative, not like manual orchestration bookkeeping
+
+### Nice-to-have performance follow-up, not a launch blocker
+
+- [ ] Avoid full on-disk team scans on every completion event
+- [ ] Avoid rediscovering all agents from disk on every slash completion keystroke
+- [ ] Improve slash live-state update complexity if it becomes noticeable
 
 ### Review gate after Parity Wave C
 
@@ -1394,29 +1523,36 @@ Wave 6: Prompt, Docs, and Thin UX Layer               ✅ implemented
 ├── /team visibility command added
 └── Terminology cleanup
 
-Parity Wave A: Canonical interaction model            (~1d)
-├── Freeze public contract from the reference UX
-├── Mark current APIs canonical vs provisional
-└── Align plan/docs/tests to the same model
+Launch blockers                                       ✅ completed
+├── Team-name path safety
+├── Lifecycle race safety
+├── Lead/session ownership correctness
+└── Final public-contract drift cleanup
 
-Parity Wave B: Runtime semantics + lifecycle          (~2d)
-├── Teammate continuation semantics
+Reference-parity Wave B                               ✅ substantially implemented
+├── Current-team context when team_name is omitted
+├── Continuation semantics for existing teammates
 ├── Notification-first coordination loop
-├── Race-safe lifecycle transitions
-└── Smooth team-name behavior
+├── Smoother team-name behavior
+└── Focused cleanup refactor (continuation + lifecycle semantics)
 
-Parity Wave C: Shared task board + team context       (~2d)
-├── Shared task ownership/mutation model
-├── Reduce repeated team_name ceremony
-├── Make current-team context first-class
+Reference-parity Wave C                               (~2d)
+├── Shared mutable task ownership/completion
+├── Shared board visibility for lead + teammates
+├── Final ceremony reduction on task flows
 └── Final parity re-check against user-perspective checklist
 ```
 
-**Remaining for Claude-style parity: ~5 days**
+**Remaining before parity:** complete Wave C, and optionally finish the small secondary-surface lifecycle alignment noted in Wave B3.
 
-**Minimum useful parity target:** the user can say
+**At-a-glance remaining task count**
+- Wave B, 1 partial cleanup item remaining (`B3` secondary-surface consistency)
+- Wave C, 4 focused task groups (`C1` to `C4`)
+- each remaining group is intended to be implementable and reviewable independently
+
+**Parity target:** the user can say
 "Create a team with 3 teammates to review this repo, wait for them, then synthesize"
-and the coordinator handles that in a way that feels like collaborative agent teamwork, not manual orchestration bookkeeping.
+and the coordinator handles that with the same collaboration feel as Claude Code Agent Teams, adapted only where pi runtime constraints force it.
 
 ---
 
@@ -1584,3 +1720,200 @@ Explicitly deferred until the lean team/task model proves insufficient:
 - `send_message` and `task_stop` work with standalone workers and with **running** teammates in the lean pass
 - Completed/stopped teammate resume is explicitly out of scope for this pass
 - One active team per lead session is an intentional v1 limitation, not a regression
+
+---
+
+## Pi-mono grounded locked decisions
+
+This section is the final architectural canon for remaining parity work.
+If any earlier section conflicts with this one, this section wins.
+These decisions are grounded in how pi actually works in `pi-mono`, especially:
+- `packages/coding-agent/README.md`
+- `packages/coding-agent/docs/rpc.md`
+- `packages/coding-agent/docs/session.md`
+- `packages/coding-agent/docs/extensions.md`
+- `packages/agent/README.md`
+
+### Locked decision 1: Teams stay an extension-level orchestration layer
+
+We are **not** moving teammate orchestration into pi core or pretending teammates are in-process.
+The canonical implementation remains:
+- pi-teams as an extension
+- named teammate workers as separate pi processes
+- coordinator behavior layered on top of pi's extension, session, and RPC primitives
+
+Reason:
+- pi core explicitly treats sub-agents as an extension/package concern, not a built-in runtime concept
+- RPC mode is the supported subprocess integration surface
+- session lifecycle hooks, custom messages, and tool registration already provide the right integration seams
+
+### Locked decision 2: Session identity and team identity are different things
+
+Canonical identities are:
+- **session identity**: pi `sessionFile` / `sessionId`
+- **teammate runtime identity**: worker process + registry entry + optional session continuation
+- **team name**: user-facing handle for the shared board
+
+Therefore:
+- team names are **not** canonical IDs
+- team-name collisions should be smoothed with safe fallback names
+- teammate continuation must be anchored to pi session continuity, not to on-disk team directory names
+
+### Locked decision 3: One active team per lead session remains canonical
+
+For this product surface, a lead session owns at most one active team.
+That team is **session-scoped** and must not be inherited across:
+- `session_switch`
+- `session_branch` / fork
+- shutdown / crash recovery
+
+Reason:
+- pi sessions are the real unit of conversation state and lifecycle
+- extensions receive explicit session lifecycle hooks for switch, fork, and shutdown
+- inheriting active teammate state across branched lead sessions would violate pi's session model and create ownership ambiguity
+
+### Locked decision 4: Current-team context is canonical in normal flows
+
+After `team_create`, repeated explicit `team_name` should be treated as optional ceremony in normal follow-up flows.
+Canonical resolution order is:
+1. explicit `team_name`, if provided
+2. current teammate runtime metadata, if running inside a teammate
+3. current active team for the lead session
+
+This must be the default contract for:
+- `spawn_teammate`
+- `check_teammate`
+- `team_shutdown`
+- `task_create`
+- `task_list`
+- `task_read`
+- `task_update`
+
+Reason:
+- pi already has stable per-session context
+- teammate runtime metadata is the correct way to scope teammate behavior inside spawned RPC sessions
+- repeating team names everywhere is not aligned with pi's session-first model
+
+### Locked decision 5: Running continuation and idle continuation use different pi primitives
+
+Canonical continuation behavior is:
+- **running teammate**: use the existing RPC stdin channel and queue the next message through pi RPC semantics
+- **idle/completed/stopped teammate with session**: resume by spawning a new RPC worker using the saved pi session context
+- **idle teammate without session**: not resumable, spawn fresh
+
+We do **not** fake continuation by reconstructing context from summaries when a real pi session exists.
+If resumability matters, the worker must have a session.
+
+Reason:
+- pi RPC is the supported transport for live control of a running process
+- pi sessions are the supported persistence primitive for continuation after process exit
+- mixing those two mechanisms keeps us aligned with pi instead of inventing a shadow runtime
+
+### Locked decision 6: Session-backed RPC workers are canonical for resumable teammates
+
+If a teammate may need continuation, it must be spawned with session persistence enabled.
+`--no-session` / ephemeral RPC workers are valid only for teammates we are willing to discard after completion.
+
+Reason:
+- pi RPC mode supports sessions and explicit session selection
+- pi session files are the only reliable persisted context for resumed teammate work
+- resumability should depend on real pi state, not extension-only memory
+
+### Locked decision 7: `send_message` is continuation, not lifecycle mutation
+
+`send_message` exists to continue useful teammate context.
+It does **not** mutate task ownership directly, switch team identity, or bypass session semantics.
+
+Canonical behavior:
+- when the teammate is running, queue the next message through its RPC channel
+- when the teammate is idle and resumable, spawn a new RPC run from its saved session and preserve the teammate name/addressability
+- use `task_stop` for explicit interruption
+
+Reason:
+- pi already separates queueing/continuation from aborting
+- task and team state should remain explicit coordination state, not side effects of message routing
+
+### Locked decision 8: Notification-first coordination is canonical
+
+Automatic teammate notifications are the primary coordination loop.
+Visibility tools are supportive only.
+
+Canonical lead behavior:
+- launch teammates
+- wait for automatic teammate notifications
+- synthesize or redirect based on those notifications
+- use `check_teammate`, `/team`, or `/workers` only when explicit inspection is needed
+
+Reason:
+- pi extensions can inject custom messages and trigger turns directly
+- pi's queue model already supports follow-up delivery without manual polling
+- over-teaching inspection commands fights the actual event-driven model available in pi
+
+### Locked decision 9: Shared task state must be real shared state, not lead-only canon
+
+The final parity target is a **shared mutable task board**.
+That means teammates should be able to read and, in the parity-complete model, mutate task ownership/completion through the same canonical tools.
+
+Canonical storage model:
+- team/task state remains extension-owned persistence
+- task writes must be atomic and version-checked
+- teammate task mutation must go through the same guarded store, not ad hoc file writes
+
+Reason:
+- pi sessions are per-process conversation state, not a cross-process shared database
+- shared team/task state therefore belongs in extension-managed persistence
+- file-backed atomic/versioned writes are the right cross-process primitive for pi-teams
+
+### Locked decision 10: Role isolation is mandatory
+
+Lead and teammate sessions must remain runtime-distinct.
+The lead gets:
+- coordinator prompt behavior
+- team lifecycle tools
+- orchestration responsibilities
+
+A teammate gets:
+- teammate runtime metadata
+- worker prompt framing
+- only the team/task surface appropriate to its role
+
+Reason:
+- pi `before_agent_start` and extension hooks are session-local
+- a spawned teammate is a new pi runtime, not a mode switch in the lead process
+- leaking lead behavior into teammates would break both the user model and pi's extension model
+
+### Locked decision 11: Team/task state is extension-owned, not hidden session canon
+
+Shared team state should remain explicit extension persistence, visible on disk and recoverable on bootstrap.
+We should not try to hide team membership or task board state inside opaque session-only entries and call that the canonical shared model.
+
+Reason:
+- pi sessions are optimized for conversation trees, compaction, and branch navigation
+- teams need cross-process shared state that survives individual worker exits and can be reconciled on startup
+- extension-owned persistence is the correct boundary between pi session history and team orchestration state
+
+### Locked decision 12: No parity work should depend on tmux, pane UI, or core-runtime changes
+
+Claude-style parity for this project is strictly about the **interaction model**.
+The implementation must stay compatible with pi's actual architecture:
+- extension hooks
+- RPC subprocesses
+- session files
+- custom messages
+- TUI overlays/widgets where helpful
+
+We are **not** locking in:
+- tmux panes
+- transcript switching
+- in-process teammate multiplexing
+- core runtime modifications to pi-mono as a prerequisite for parity
+
+### Locked implementation consequences
+
+These are the direct consequences for the remaining work:
+- `team_name` omission is the canonical normal path, not sugar
+- resumable teammates require session-backed RPC workers
+- teammate addressability must survive process replacement when a teammate is resumed
+- notification-first docs/prompt behavior is canonical and must stay aligned across README, installer, builtin prompts, and tests
+- shared task mutation belongs in the task tools and store, not in hidden prompt conventions
+- any future change that contradicts pi's session/RPC/extension model must be rejected unless pi-mono itself changes first

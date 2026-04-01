@@ -11,7 +11,7 @@ export const TeamCreateParams = Type.Object({
 });
 
 export const SpawnTeammateParams = Type.Object({
-	team_name: Type.String(),
+	team_name: Type.Optional(Type.String()),
 	name: Type.String(),
 	prompt: Type.String(),
 	cwd: Type.String(),
@@ -19,12 +19,12 @@ export const SpawnTeammateParams = Type.Object({
 });
 
 export const CheckTeammateParams = Type.Object({
-	team_name: Type.String(),
+	team_name: Type.Optional(Type.String()),
 	agent_name: Type.String(),
 });
 
 export const TeamShutdownParams = Type.Object({
-	team_name: Type.String(),
+	team_name: Type.Optional(Type.String()),
 });
 
 interface SpawnTeammateRequest {
@@ -143,7 +143,8 @@ export function createSpawnTeammateTool(
 			}
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("spawn_teammate "))}${args.name}@${args.team_name}`, 0, 0);
+			const targetTeam = args.team_name ?? "(current team)";
+			return new Text(`${theme.fg("toolTitle", theme.bold("spawn_teammate "))}${args.name}@${targetTeam}`, 0, 0);
 		},
 	};
 }
@@ -167,8 +168,12 @@ export function createCheckTeammateTool(
 								`Team: ${status.teamName}`,
 								`Teammate: ${status.member.name}`,
 								`Status: ${status.status}`,
+								`Activity: ${status.lifecycle.activity}`,
+								`Addressable: ${status.lifecycle.addressable ? "yes" : "no"}`,
 								status.effectiveModel ? `Model: ${status.effectiveModel}` : undefined,
 								status.lastSummary ? `Summary: ${status.lastSummary}` : undefined,
+								status.sessionFile ? `Session: ${status.sessionFile}` : undefined,
+								`Continuation: ${status.lifecycle.continuationText}`,
 							].filter(Boolean).join("\n"),
 						},
 					],
@@ -176,8 +181,14 @@ export function createCheckTeammateTool(
 						team_name: status.teamName,
 						name: status.member.name,
 						status: status.status,
+						activity: status.lifecycle.activity,
+						addressable: status.lifecycle.addressable,
+						can_resume: status.lifecycle.canResume,
+						can_queue_follow_up: status.lifecycle.canQueueFollowUp,
+						continuation: status.lifecycle.continuationText,
 						model: status.effectiveModel,
 						lastSummary: status.lastSummary,
+						session_file: status.sessionFile,
 						state: status.state,
 					},
 				};
@@ -186,7 +197,8 @@ export function createCheckTeammateTool(
 			}
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("check_teammate "))}${args.agent_name}@${args.team_name}`, 0, 0);
+			const targetTeam = args.team_name ?? "(current team)";
+			return new Text(`${theme.fg("toolTitle", theme.bold("check_teammate "))}${args.agent_name}@${targetTeam}`, 0, 0);
 		},
 	};
 }
@@ -215,7 +227,7 @@ export function createTeamShutdownTool(
 			}
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("team_shutdown "))}${args.team_name}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("team_shutdown "))}${args.team_name ?? "(current team)"}`, 0, 0);
 		},
 	};
 }

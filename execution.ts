@@ -57,7 +57,7 @@ export async function runSync(
 
 	const isRpc = options.spawnMode === "rpc";
 	const shareEnabled = options.share === true;
-	const sessionEnabled = isRpc ? false : (Boolean(options.sessionFile || options.sessionDir) || shareEnabled);
+	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
 	const effectiveModel = modelOverride ?? agent.model;
 	const modelArg = applyThinkingSuffix(effectiveModel, agent.thinking);
 
@@ -79,8 +79,8 @@ export async function runSync(
 		task,
 		skipTaskArg: isRpc,
 		sessionEnabled,
-		sessionDir: isRpc ? undefined : options.sessionDir,
-		sessionFile: isRpc ? undefined : options.sessionFile,
+		sessionDir: options.sessionDir,
+		sessionFile: options.sessionFile,
 		model: effectiveModel,
 		thinking: agent.thinking,
 		tools: agent.tools,
@@ -360,7 +360,7 @@ export async function runSync(
 		}
 	}
 
-	if (shareEnabled) {
+	if (sessionEnabled) {
 		const sessionFile = options.sessionFile
 			?? (options.sessionDir ? findLatestSessionFile(options.sessionDir) : null);
 		if (sessionFile) {

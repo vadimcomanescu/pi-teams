@@ -30,6 +30,7 @@ describe("team tools integration", () => {
 	let tempDir: string;
 	let registry: AgentRegistry;
 	let sessionId: string;
+	let currentTeammateTeamName: string | null;
 	let teamManager: TeamManager;
 	let spawnedRequests: any[];
 
@@ -37,11 +38,13 @@ describe("team tools integration", () => {
 		tempDir = makeTempDir();
 		registry = new AgentRegistry();
 		sessionId = "lead-session";
+		currentTeammateTeamName = null;
 		spawnedRequests = [];
 		teamManager = new TeamManager({
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => sessionId,
+			getCurrentTeammateTeamName: () => currentTeammateTeamName,
 		});
 	});
 
@@ -77,6 +80,7 @@ describe("team tools integration", () => {
 					task: request.prompt,
 					status: "running",
 					startTime: Date.now(),
+					sessionFile: "/tmp/worker-1.jsonl",
 				});
 				return { agentId: "worker-1", effectiveModel: request.effectiveModel };
 			},
@@ -84,20 +88,19 @@ describe("team tools integration", () => {
 		const checkTeammate = createCheckTeammateTool(teamManager);
 		const shutdown = createTeamShutdownTool(teamManager);
 
-		await exec(createTeam, { team_name: "repo-review", default_model: "anthropic/claude-sonnet-4.6" });
+		const createdTeam = await exec(createTeam, { team_name: "repo-review", default_model: "anthropic/claude-sonnet-4.6" });
+		assert.equal(createdTeam.details.team_name, "repo-review");
 		const createdTask = await exec(createTask, {
-			team_name: "repo-review",
 			subject: "Architecture review",
 			description: "Check boundaries",
 		});
+		assert.equal(createdTask.details.team_name, "repo-review");
 		await exec(updateTask, {
-			team_name: "repo-review",
 			task_id: createdTask.details.id,
 			owner: "architecture",
 			status: "in_progress",
 		});
 		const spawnResult = await exec(spawnTeammate, {
-			team_name: "repo-review",
 			name: "architecture",
 			prompt: "Review repository architecture",
 			cwd: tempDir,
@@ -109,15 +112,31 @@ describe("team tools integration", () => {
 
 		registry.updateStatus("worker-1", "completed", "Architecture looks good");
 		teamManager.recordTeammateStatus("worker-1", "completed", "Architecture looks good");
-		const checkResult = await exec(checkTeammate, { team_name: "repo-review", agent_name: "architecture" });
+		const checkResult = await exec(checkTeammate, { agent_name: "architecture" });
 		assert.equal(checkResult.details.status, "completed");
+		assert.equal(checkResult.details.activity, "idle");
+		assert.equal(checkResult.details.addressable, true);
 		assert.equal(checkResult.details.lastSummary, "Architecture looks good");
 
-		const taskList = await exec(listTasks, { team_name: "repo-review" });
+		const taskList = await exec(listTasks, {});
 		assert.match(taskList.content[0].text, /Architecture review/);
 
-		await exec(shutdown, { team_name: "repo-review" });
+		await exec(shutdown, {});
 		assert.equal(teamManager.getTeam("repo-review")?.state, "shutdown");
+	});
+
+	it("lets teammates read their own team state without repeating team_name", async () => {
+		teamManager.createTeam({ team_name: "repo-review" });
+		const store = new TaskStore("repo-review", teamManager.getTasksPath("repo-review"));
+		store.createTask("Docs review", "Check README");
+		currentTeammateTeamName = "repo-review";
+		const listTasks = createTaskListTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const result = await exec(listTasks, {});
+		assert.equal(result.isError, undefined);
+		assert.match(result.content[0].text, /Docs review/);
 	});
 
 	it("only the lead session can mutate team and task state", async () => {
@@ -129,6 +148,7 @@ describe("team tools integration", () => {
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => sessionId,
+			getCurrentTeammateTeamName: () => null,
 		});
 		const createTask = createTaskCreateTool({
 			teamManager: foreignManager,

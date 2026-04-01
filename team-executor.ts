@@ -70,6 +70,7 @@ export interface TeamParamsLike {
 	clarify?: boolean;
 	share?: boolean;
 	sessionDir?: string;
+	sessionFile?: string;
 	cwd?: string;
 	maxOutput?: MaxOutputConfig;
 	artifacts?: boolean;
@@ -276,13 +277,15 @@ interface CoordinatorSpawnInput {
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
 	modelOverride: string | undefined;
+	sessionDir?: string;
+	sessionFile?: string;
 }
 
 function spawnCoordinatorWorker(
 	input: CoordinatorSpawnInput,
 	deps: ExecutorDeps,
 ): AgentToolResult<Details> | null {
-	const { params, agents, ctx, signal, runId, task, skillOverride, artifactConfig, artifactsDir, modelOverride } = input;
+	const { params, agents, ctx, signal, runId, task, skillOverride, artifactConfig, artifactsDir, modelOverride, sessionDir, sessionFile } = input;
 	const registry = deps.registry!;
 	const settings = getCoordinatorSettings();
 
@@ -325,6 +328,8 @@ function spawnCoordinatorWorker(
 		signal,
 		runId,
 		spawnMode: "rpc",
+		sessionDir,
+		sessionFile,
 		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 		artifactConfig,
 		maxOutput: params.maxOutput,
@@ -342,6 +347,10 @@ function spawnCoordinatorWorker(
 				pid: proc.pid,
 				rpcHandle: { stdin: proc.stdin!, proc },
 				cwd: params.cwd ?? ctx.cwd,
+				model: modelOverride,
+				runtimeRole: params.runtimeRole,
+				teamMetadata: params.teamMetadata,
+				sessionFile,
 			});
 		},
 	});
@@ -358,13 +367,19 @@ function spawnCoordinatorWorker(
 	// Handle completion in background
 	promise.then((result) => {
 		const output = getFinalOutput(result.messages);
-		registry.updateStatus(workerId, result.exitCode === 0 ? "completed" : "failed", output);
+		const exitStatus = result.exitCode === 0 ? "completed" : "failed";
+		registry.patch(workerId, { sessionFile: result.sessionFile ?? sessionFile, model: modelOverride });
+		registry.updateStatus(workerId, exitStatus, output);
+		const current = registry.resolve(workerId);
+		const finalStatus = current?.status === "running" || !current ? exitStatus : current.status;
+		const finalSummary = current?.result ?? output;
 		deps.pi.events.emit("team:complete", {
 			id: workerId,
 			agent: params.agent,
 			name: workerName,
-			success: result.exitCode === 0,
-			summary: output,
+			status: finalStatus,
+			success: finalStatus === "completed",
+			summary: finalSummary,
 			exitCode: result.exitCode,
 			timestamp: Date.now(),
 			usage: {
@@ -375,6 +390,16 @@ function spawnCoordinatorWorker(
 		});
 	}).catch(() => {
 		registry.updateStatus(workerId, "failed");
+		deps.pi.events.emit("team:complete", {
+			id: workerId,
+			agent: params.agent,
+			name: workerName,
+			status: registry.resolve(workerId)?.status ?? "failed",
+			success: false,
+			summary: registry.resolve(workerId)?.result ?? "Worker failed",
+			exitCode: 1,
+			timestamp: Date.now(),
+		});
 	});
 
 	const displayName = workerName ?? params.agent;
@@ -767,8 +792,18 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	// Unnamed workers use standard blocking execution.
 	if (params.name && deps.registry) {
 		const coordinatorResult = spawnCoordinatorWorker({
-			params, agents, ctx, signal, runId, task, skillOverride,
-			artifactConfig, artifactsDir, modelOverride,
+			params,
+			agents,
+			ctx,
+			signal,
+			runId,
+			task,
+			skillOverride,
+			artifactConfig,
+			artifactsDir,
+			modelOverride,
+			sessionDir: params.sessionFile ? undefined : (params.sessionDir ?? sessionDirForIndex(0)),
+			sessionFile: params.sessionFile ?? sessionFileForIndex(0),
 		}, deps);
 		if (coordinatorResult) return coordinatorResult;
 	}
@@ -856,8 +891,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		cwd: params.cwd,
 		signal,
 		runId,
-		sessionDir: sessionDirForIndex(0),
-		sessionFile: sessionFileForIndex(0),
+		sessionDir: params.sessionFile ? undefined : (params.sessionDir ?? sessionDirForIndex(0)),
+		sessionFile: params.sessionFile ?? sessionFileForIndex(0),
 		share: shareEnabled,
 		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 		artifactConfig,
@@ -952,7 +987,9 @@ export function createTeamExecutor(deps: ExecutorDeps): {
 
 		const scope: AgentScope = resolveExecutionAgentScope(params.agentScope);
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
-		deps.state.currentSessionId = parentSessionFile ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		if (!deps.state.currentSessionId) {
+			deps.state.currentSessionId = parentSessionFile ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		}
 		const agents = deps.discoverAgents(ctx.cwd, scope).agents;
 		const runId = randomUUID().slice(0, 8);
 		const shareEnabled = params.share === true;

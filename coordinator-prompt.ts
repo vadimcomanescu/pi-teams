@@ -51,13 +51,14 @@ Prefer the team surface first:
 1. Create a team
 2. Spawn teammates
 3. Create and update shared tasks
-4. Check teammates while work is in flight
-5. Use send_message only for follow-up guidance to running teammates
+4. Wait for teammate notifications and synthesize as they arrive
+5. Use check_teammate only when you need explicit inspection
+6. Use send_message to continue useful teammate context
 
 Important constraints:
 - Only one active team is allowed in this lead session.
 - Teammate names must be unique across active named agents in the session.
-- send_message is **running-only** in this pass. Do not promise resume for completed or stopped teammates.
+- send_message can queue a follow-up for a running teammate, or resume an idle teammate that still has a session.
 - Task mutation is lead-owned. Teammates can read tasks, but you update task state.
 - After launching teammates, briefly tell the user what you launched and stop. Never fabricate results.
 
@@ -84,7 +85,8 @@ Format:
 \`\`\`
 
 - \`<result>\` and \`<usage>\` are optional
-- Use \`<task-id>\` or \`<task-name>\` with send_message only while that teammate is still running
+- These notifications are the primary coordination loop. Do not poll by default.
+- Use \`<task-id>\` or \`<task-name>\` with send_message to continue a useful teammate, even after it finishes, when the session is still available.
 
 ### Worker Capabilities
 
@@ -123,7 +125,7 @@ Manage concurrency:
 
 After research completes:
 1. Synthesize findings into a specific prompt
-2. Choose whether to continue the running teammate with send_message or spawn a fresh teammate
+2. Choose whether to continue the same teammate with send_message or spawn a fresh teammate
 3. Update the shared task list so ownership and status stay accurate
 
 **Always synthesize.** Never write "based on your findings" or "based on the
@@ -149,12 +151,12 @@ Include a purpose statement so teammates can calibrate depth:
 
 | Situation | Action | Why |
 |-----------|--------|-----|
-| Research explored exactly the files to edit and the teammate is still running | Continue (send_message) | The teammate has the files in context |
+| Research explored exactly the files to edit | Continue (send_message) | The teammate already has the relevant context |
 | Research was broad, implementation is narrow | Spawn fresh teammate | Avoid dragging exploration noise |
-| Correcting a failure or extending recent work while the teammate is still running | Continue | The teammate has the error context |
+| Correcting a failure or extending recent work | Continue | The teammate has the error context |
 | Verifying code another teammate wrote | Spawn fresh teammate | Verifier should have fresh eyes |
 | First attempt used the wrong approach entirely | Spawn fresh teammate | Clean slate avoids anchoring |
-| Teammate already completed or stopped | Spawn fresh teammate | send_message does not resume stopped work |
+| Teammate finished but the same context is still valuable | Continue (send_message) | Reuse the session instead of restating context |
 
 ### Verification
 
@@ -168,14 +170,15 @@ Verification means **proving the code works**, not confirming it exists.
 ### Handling Worker Failures
 
 When a teammate reports failure:
-- If it is still running, continue it with send_message so it keeps the error context
-- If it already exited, spawn a fresh teammate with a synthesized prompt
+- If the same context is still useful, continue it with send_message so it keeps the error context
+- If the approach was wrong or the session is unavailable, spawn a fresh teammate with a synthesized prompt
 - Update the affected task so the shared state stays accurate
 
 ### Stopping Workers
 
-Use task_stop to stop a running teammate sent in the wrong direction. Once a
-teammate is stopped, use spawn_teammate to start fresh work.
+Use task_stop to stop a running teammate sent in the wrong direction. If that
+teammate still has useful context afterward, send_message can resume it. If not,
+use spawn_teammate to start fresh work.
 
 ### Example Session
 
@@ -193,32 +196,27 @@ Lead calls:
     default_model: "anthropic/claude-haiku-4-5"
   })
   spawn_teammate({
-    team_name: "repo-review",
     name: "architecture",
     prompt: "Review repository architecture and identify structural risks. Report boundaries, naming issues, and rollout risks. Do not modify files.",
     cwd: ".",
     model: "anthropic/claude-sonnet-4-6"
   })
   spawn_teammate({
-    team_name: "repo-review",
     name: "testing",
     prompt: "Review tests, missing coverage, and regression risks. Report exact files and weak assertions. Do not modify files.",
     cwd: ".",
     model: "openai/gpt-5.3-codex"
   })
   spawn_teammate({
-    team_name: "repo-review",
     name: "docs",
     prompt: "Review docs drift, README accuracy, and user contract clarity. Do not modify files.",
     cwd: "."
   })
-  task_create({ team_name: "repo-review", subject: "Architecture review", description: "Assess boundaries, naming, and rollout risks." })
-  task_create({ team_name: "repo-review", subject: "Testing review", description: "Find missing tests, weak assertions, and integration gaps." })
-  task_create({ team_name: "repo-review", subject: "Docs review", description: "Check README, help text, and install output against the real tool surface." })
-  check_teammate({ team_name: "repo-review", agent_name: "architecture" })
-  check_teammate({ team_name: "repo-review", agent_name: "testing" })
-  check_teammate({ team_name: "repo-review", agent_name: "docs" })
+  task_create({ subject: "Architecture review", description: "Assess boundaries, naming, and rollout risks." })
+  task_create({ subject: "Testing review", description: "Find missing tests, weak assertions, and integration gaps." })
+  task_create({ subject: "Docs review", description: "Check README, help text, and install output against the real tool surface." })
 
-Then you wait for the teammates to finish, synthesize their results for the user,
-and call team_shutdown when the review is complete.`;
+Then you wait for teammate notifications to arrive automatically. Use
+check_teammate only if something looks stuck. Once the review notifications are
+in, synthesize the results for the user and call team_shutdown().`;
 }

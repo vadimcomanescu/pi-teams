@@ -14,16 +14,19 @@ describe("TeamManager", () => {
 	let tempDir: string;
 	let registry: AgentRegistry;
 	let currentSessionId: string;
+	let currentTeammateTeamName: string | null;
 	let teamManager: TeamManager;
 
 	beforeEach(() => {
 		tempDir = makeTempDir();
 		registry = new AgentRegistry();
 		currentSessionId = "session-a";
+		currentTeammateTeamName = null;
 		teamManager = new TeamManager({
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => currentSessionId,
+			getCurrentTeammateTeamName: () => currentTeammateTeamName,
 		});
 	});
 
@@ -43,7 +46,7 @@ describe("TeamManager", () => {
 		assert.throws(() => teamManager.createTeam({ team_name: "second" }), /Only one active team/);
 	});
 
-	it("rejects reusing any existing team name on disk", () => {
+	it("smooths name collisions by choosing a safe alternative", () => {
 		teamManager.createTeam({ team_name: "shared" });
 		teamManager.shutdownTeam("shared", "done");
 		currentSessionId = "session-b";
@@ -51,8 +54,37 @@ describe("TeamManager", () => {
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => currentSessionId,
+			getCurrentTeammateTeamName: () => null,
 		});
-		assert.throws(() => secondManager.createTeam({ team_name: "shared" }), /cannot be reused in this pass/);
+		const created = secondManager.createTeam({ team_name: "shared" });
+		assert.equal(created.name, "shared-2");
+		assert.ok(fs.existsSync(path.join(tempDir, "shared-2", "config.json")));
+	});
+
+	it("rejects unsafe dot-segment team names", () => {
+		assert.throws(() => teamManager.createTeam({ team_name: "." }), /Unsafe team name/);
+		assert.throws(() => teamManager.createTeam({ team_name: ".." }), /Unsafe team name/);
+	});
+
+	it("keeps resolved team paths inside the teams root", () => {
+		const configPath = teamManager.getConfigPath("../../escape");
+		const relative = path.relative(tempDir, configPath);
+		assert.equal(path.isAbsolute(relative), false);
+		assert.equal(relative === ".." || relative.startsWith(`..${path.sep}`), false);
+		assert.throws(() => teamManager.getTeamDir(".."), /Unsafe team name/);
+	});
+
+	it("resolves omitted team_name to the active team in the lead session", () => {
+		teamManager.createTeam({ team_name: "review" });
+		assert.equal(teamManager.resolveTeamName(), "review");
+		assert.equal(teamManager.assertLeadControl().name, "review");
+	});
+
+	it("resolves omitted team_name to the teammate's own team", () => {
+		teamManager.createTeam({ team_name: "review" });
+		currentTeammateTeamName = "review";
+		assert.equal(teamManager.resolveTeamName(), "review");
+		assert.equal(teamManager.assertTeamAccess().name, "review");
 	});
 
 	it("registers and checks a teammate with effective model", () => {
@@ -78,6 +110,47 @@ describe("TeamManager", () => {
 		assert.equal(teammate.teamName, "review");
 		assert.equal(teammate.status, "running");
 		assert.equal(teammate.effectiveModel, "anthropic/claude-sonnet-4.6");
+	});
+
+	it("rebinds a resumed teammate to the latest agent id by name", () => {
+		teamManager.createTeam({ team_name: "review" });
+		registry.register({
+			id: "worker-1",
+			name: "docs",
+			agentType: "worker",
+			task: "Review docs",
+			status: "completed",
+			startTime: Date.now() - 1000,
+			sessionFile: "/tmp/docs.jsonl",
+		});
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			model: undefined,
+			status: "completed",
+			cwd: tempDir,
+		});
+		registry.register({
+			id: "worker-2",
+			name: "docs",
+			agentType: "worker",
+			task: "Follow up on docs",
+			status: "running",
+			startTime: Date.now(),
+		});
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-2",
+			agentType: "worker",
+			model: undefined,
+			status: "running",
+			cwd: tempDir,
+		});
+
+		const teammate = teamManager.checkTeammate("review", "docs");
+		assert.equal(teammate.member.agentId, "worker-2");
+		assert.equal(teammate.status, "running");
 	});
 
 	it("rejects duplicate active named-agent names", () => {
@@ -126,8 +199,39 @@ describe("TeamManager", () => {
 		assert.equal(shutdown.state, "shutdown");
 		assert.equal(teamManager.checkTeammate("review", "docs").status, "stopped");
 
+		registry.updateStatus("worker-1", "completed", "late exit");
 		teamManager.recordTeammateStatus("worker-1", "completed", "late exit");
 		assert.equal(teamManager.checkTeammate("review", "docs").status, "stopped");
+	});
+
+	it("preserves timed_out status against later process exit races", () => {
+		teamManager.createTeam({ team_name: "review" });
+		registry.register({
+			id: "worker-1",
+			name: "docs",
+			agentType: "worker",
+			task: "Review docs",
+			status: "running",
+			startTime: Date.now(),
+		});
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			model: undefined,
+			status: "running",
+			cwd: tempDir,
+		});
+
+		registry.updateStatus("worker-1", "timed_out", "Timed out after 5000ms");
+		teamManager.recordTeammateStatus("worker-1", "timed_out", "Timed out after 5000ms");
+		assert.equal(teamManager.checkTeammate("review", "docs").status, "timed_out");
+
+		registry.updateStatus("worker-1", "failed", "late exit after timeout");
+		teamManager.recordTeammateStatus("worker-1", "failed", "late exit after timeout");
+		const status = teamManager.checkTeammate("review", "docs");
+		assert.equal(status.status, "timed_out");
+		assert.equal(status.lastSummary, "Timed out after 5000ms");
 	});
 
 	it("round-trips persistence including state", () => {
@@ -137,6 +241,7 @@ describe("TeamManager", () => {
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => currentSessionId,
+			getCurrentTeammateTeamName: () => currentTeammateTeamName,
 		});
 		assert.equal(reloaded.getTeam("review")?.state, "shutdown");
 	});
@@ -148,6 +253,7 @@ describe("TeamManager", () => {
 			registry,
 			rootDir: tempDir,
 			getCurrentSessionId: () => currentSessionId,
+			getCurrentTeammateTeamName: () => null,
 		});
 		reloaded.bootstrap();
 		assert.equal(reloaded.getTeam("review")?.state, "orphaned");

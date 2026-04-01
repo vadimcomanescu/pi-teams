@@ -9,22 +9,22 @@ const TaskStatusSchema = Type.String({
 });
 
 export const TaskCreateParams = Type.Object({
-	team_name: Type.String(),
+	team_name: Type.Optional(Type.String()),
 	subject: Type.String(),
 	description: Type.String(),
 });
 
 export const TaskListParams = Type.Object({
-	team_name: Type.String(),
+	team_name: Type.Optional(Type.String()),
 });
 
 export const TaskReadParams = Type.Object({
-	team_name: Type.String(),
+	team_name: Type.Optional(Type.String()),
 	task_id: Type.String(),
 });
 
 export const TaskUpdateParams = Type.Object({
-	team_name: Type.String(),
+	team_name: Type.Optional(Type.String()),
 	task_id: Type.String(),
 	status: Type.Optional(TaskStatusSchema),
 	owner: Type.Optional(Type.String()),
@@ -55,19 +55,18 @@ export function createTaskCreateTool(deps: TaskToolsDeps): ToolDefinition<typeof
 		parameters: TaskCreateParams,
 		async execute(_toolCallId, params) {
 			try {
-				deps.teamManager.assertLeadControl(params.team_name);
-				const store = deps.createTaskStore(params.team_name);
-				const task = store.createTask(params.subject, params.description);
+				const team = deps.teamManager.assertLeadControl(params.team_name);
+				const task = deps.createTaskStore(team.name).createTask(params.subject, params.description);
 				return {
 					content: [{ type: "text" as const, text: `Created task ${task.id}: ${task.subject}` }],
-					details: task,
+					details: { ...task, team_name: team.name },
 				};
 			} catch (error) {
 				return toErrorResult(error instanceof Error ? error.message : String(error), { team_name: params.team_name });
 			}
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("task_create "))}${args.team_name}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("task_create "))}${args.team_name ?? "(current team)"}`, 0, 0);
 		},
 	};
 }
@@ -80,10 +79,7 @@ export function createTaskListTool(deps: TaskToolsDeps): ToolDefinition<typeof T
 		parameters: TaskListParams,
 		async execute(_toolCallId, params) {
 			try {
-				const team = deps.teamManager.getTeam(params.team_name);
-				if (!team) {
-					return toErrorResult(`Team not found: ${params.team_name}`, { team_name: params.team_name });
-				}
+				const team = deps.teamManager.assertTeamAccess(params.team_name);
 				const tasks = deps.createTaskStore(team.name).listTasks();
 				return {
 					content: [{ type: "text" as const, text: tasks.length > 0 ? tasks.map(formatTask).join("\n") : `No tasks for team "${team.name}"` }],
@@ -94,7 +90,7 @@ export function createTaskListTool(deps: TaskToolsDeps): ToolDefinition<typeof T
 			}
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("task_list "))}${args.team_name}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("task_list "))}${args.team_name ?? "(current team)"}`, 0, 0);
 		},
 	};
 }
@@ -107,13 +103,10 @@ export function createTaskReadTool(deps: TaskToolsDeps): ToolDefinition<typeof T
 		parameters: TaskReadParams,
 		async execute(_toolCallId, params) {
 			try {
-				const team = deps.teamManager.getTeam(params.team_name);
-				if (!team) {
-					return toErrorResult(`Team not found: ${params.team_name}`, { team_name: params.team_name });
-				}
+				const team = deps.teamManager.assertTeamAccess(params.team_name);
 				const task = deps.createTaskStore(team.name).readTask(params.task_id);
 				if (!task) {
-					return toErrorResult(`Task not found: ${params.task_id}`, { team_name: params.team_name, task_id: params.task_id });
+					return toErrorResult(`Task not found: ${params.task_id}`, { team_name: team.name, task_id: params.task_id });
 				}
 				return {
 					content: [{
@@ -127,14 +120,14 @@ export function createTaskReadTool(deps: TaskToolsDeps): ToolDefinition<typeof T
 							task.description,
 						].filter(Boolean).join("\n"),
 					}],
-					details: task,
+					details: { ...task, team_name: team.name },
 				};
 			} catch (error) {
 				return toErrorResult(error instanceof Error ? error.message : String(error), { team_name: params.team_name, task_id: params.task_id });
 			}
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("task_read "))}${args.task_id}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("task_read "))}${args.task_id}@${args.team_name ?? "(current team)"}`, 0, 0);
 		},
 	};
 }
@@ -147,14 +140,14 @@ export function createTaskUpdateTool(deps: TaskToolsDeps): ToolDefinition<typeof
 		parameters: TaskUpdateParams,
 		async execute(_toolCallId, params) {
 			try {
-				deps.teamManager.assertLeadControl(params.team_name);
-				const store = deps.createTaskStore(params.team_name);
+				const team = deps.teamManager.assertLeadControl(params.team_name);
+				const store = deps.createTaskStore(team.name);
 				const existing = store.readTask(params.task_id);
 				if (!existing) {
-					return toErrorResult(`Task not found: ${params.task_id}`, { team_name: params.team_name, task_id: params.task_id });
+					return toErrorResult(`Task not found: ${params.task_id}`, { team_name: team.name, task_id: params.task_id });
 				}
 				if (params.status === undefined && params.owner === undefined) {
-					return toErrorResult("Provide status and/or owner to update.", { team_name: params.team_name, task_id: params.task_id });
+					return toErrorResult("Provide status and/or owner to update.", { team_name: team.name, task_id: params.task_id });
 				}
 				const updated = store.updateTask(
 					params.task_id,
@@ -163,14 +156,14 @@ export function createTaskUpdateTool(deps: TaskToolsDeps): ToolDefinition<typeof
 				);
 				return {
 					content: [{ type: "text" as const, text: `Updated task ${updated.id}` }],
-					details: updated,
+					details: { ...updated, team_name: team.name },
 				};
 			} catch (error) {
 				return toErrorResult(error instanceof Error ? error.message : String(error), { team_name: params.team_name, task_id: params.task_id });
 			}
 		},
 		renderCall(args, theme) {
-			return new Text(`${theme.fg("toolTitle", theme.bold("task_update "))}${args.task_id}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("task_update "))}${args.task_id}@${args.team_name ?? "(current team)"}`, 0, 0);
 		},
 	};
 }

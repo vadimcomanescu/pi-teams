@@ -44,6 +44,7 @@ import {
 import { AgentRegistry } from "./agent-registry.js";
 import {
 	getCoordinatorSettings,
+	getCurrentTeammateTeamName,
 	getRuntimeRole,
 	getTeammateSystemPromptBlock,
 	isLeadRuntimeRole,
@@ -52,6 +53,7 @@ import {
 import { getCoordinatorSystemPrompt } from "./coordinator-prompt.js";
 import { createTaskStopTool } from "./task-stop-tool.js";
 import { createSendMessageTool } from "./send-message-tool.js";
+import { createResumeAgent } from "./teammate-continuation.js";
 import { createLifecycleDedupe } from "./lifecycle-dedupe.js";
 import { TeamManager } from "./team-manager.js";
 import { TaskStore } from "./task-store.js";
@@ -247,6 +249,7 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 	const teamManager = new TeamManager({
 		registry,
 		getCurrentSessionId: () => state.currentSessionId,
+		getCurrentTeammateTeamName,
 		onMemberStopped: (member, team, reason) => {
 			emitTeamCompletion({
 				id: member.agentId,
@@ -482,8 +485,18 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 	pi.registerTool(tool);
 	pi.registerTool(statusTool);
 
+	pi.registerTool(createCheckTeammateTool(teamManager));
+	pi.registerTool(createTaskListTool({ teamManager, createTaskStore }));
+	pi.registerTool(createTaskReadTool({ teamManager, createTaskStore }));
+
 	if (isLeadRuntime) {
-		pi.registerTool(createSendMessageTool(registry));
+		pi.registerTool(createSendMessageTool(registry, {
+			resumeAgent: createResumeAgent({
+				execute: executor.execute,
+				teamManager,
+				getFallbackCwd: () => state.baseCwd,
+			}),
+		}));
 		pi.registerTool(createTaskStopTool(registry, (agent) => {
 			emitTeamCompletion({
 				id: agent.id,
@@ -527,11 +540,8 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 				};
 			},
 		}));
-		pi.registerTool(createCheckTeammateTool(teamManager));
 		pi.registerTool(createTeamShutdownTool(teamManager));
 		pi.registerTool(createTaskCreateTool({ teamManager, createTaskStore }));
-		pi.registerTool(createTaskListTool({ teamManager, createTaskStore }));
-		pi.registerTool(createTaskReadTool({ teamManager, createTaskStore }));
 		pi.registerTool(createTaskUpdateTool({ teamManager, createTaskStore }));
 		registerSlashCommands(pi, state, {
 			registry,

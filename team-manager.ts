@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentRegistry, AgentStatus } from "./agent-registry.js";
+import type { RegisteredAgent, AgentRegistry, AgentStatus } from "./agent-registry.js";
 import { withFileLock, writeJsonAtomically } from "./state-file-utils.js";
+import { describeTeammateLifecycle, type TeammateLifecycle } from "./teammate-lifecycle.js";
 
 export type TeamState = "active" | "shutdown" | "orphaned";
 
@@ -28,9 +29,21 @@ export interface Team {
 	shutdownAt?: number;
 }
 
+export interface CheckedTeammate {
+	teamName: string;
+	effectiveModel?: string;
+	status: AgentStatus;
+	lastSummary?: string;
+	member: TeamMember;
+	state: TeamState;
+	sessionFile?: string;
+	lifecycle: TeammateLifecycle;
+}
+
 interface TeamManagerOptions {
 	registry: AgentRegistry;
 	getCurrentSessionId: () => string | null;
+	getCurrentTeammateTeamName?: () => string | null;
 	rootDir?: string;
 	now?: () => number;
 	onMemberStopped?: (member: TeamMember, team: Team, reason?: string) => void;
@@ -42,6 +55,14 @@ function sanitizeTeamName(teamName: string): string {
 	return teamName.trim().replace(/[^a-zA-Z0-9._-]+/g, "-");
 }
 
+function validateSanitizedTeamName(teamName: string): string {
+	const sanitized = sanitizeTeamName(teamName);
+	if (!sanitized || sanitized === "." || sanitized === "..") {
+		throw new Error(`Unsafe team name: ${teamName}`);
+	}
+	return sanitized;
+}
+
 export class TeamManager {
 	private readonly options: TeamManagerOptions;
 	private readonly rootDir: string;
@@ -51,7 +72,7 @@ export class TeamManager {
 
 	constructor(options: TeamManagerOptions) {
 		this.options = options;
-		this.rootDir = options.rootDir ?? path.join(os.homedir(), ".pi", "teams");
+		this.rootDir = path.resolve(options.rootDir ?? path.join(os.homedir(), ".pi", "teams"));
 		this.now = options.now ?? (() => Date.now());
 		this.onMemberStopped = options.onMemberStopped;
 		this.rootLockPath = path.join(this.rootDir, ".teams-root");
@@ -62,16 +83,28 @@ export class TeamManager {
 		return this.rootDir;
 	}
 
+	private resolveTeamPath(teamName: string, fileName?: string): string {
+		const sanitized = validateSanitizedTeamName(teamName);
+		const resolved = fileName
+			? path.resolve(this.rootDir, sanitized, fileName)
+			: path.resolve(this.rootDir, sanitized);
+		const relative = path.relative(this.rootDir, resolved);
+		if (!relative || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+			throw new Error(`Resolved team path escapes teams root: ${teamName}`);
+		}
+		return resolved;
+	}
+
 	getTeamDir(teamName: string): string {
-		return path.join(this.rootDir, sanitizeTeamName(teamName));
+		return this.resolveTeamPath(teamName);
 	}
 
 	getConfigPath(teamName: string): string {
-		return path.join(this.getTeamDir(teamName), "config.json");
+		return this.resolveTeamPath(teamName, "config.json");
 	}
 
 	getTasksPath(teamName: string): string {
-		return path.join(this.getTeamDir(teamName), "tasks.json");
+		return this.resolveTeamPath(teamName, "tasks.json");
 	}
 
 	private withRootLock<T>(callback: () => T): T {
@@ -136,6 +169,25 @@ export class TeamManager {
 		return this.listTeams().find((team) => team.leadSessionId === sessionId && team.state === "active");
 	}
 
+	resolveCurrentTeamName(): string | undefined {
+		const teammateTeamName = this.options.getCurrentTeammateTeamName?.() ?? undefined;
+		if (teammateTeamName) return teammateTeamName;
+		return this.getActiveTeam()?.name;
+	}
+
+	private resolveRequestedTeamName(teamName?: string): string {
+		if (teamName && teamName.trim()) return teamName;
+		const current = this.resolveCurrentTeamName();
+		if (!current) {
+			throw new Error("No current team context. Provide team_name explicitly.");
+		}
+		return current;
+	}
+
+	resolveTeamName(teamName?: string): string {
+		return this.resolveRequestedTeamName(teamName);
+	}
+
 	private requireLeadSessionId(): string {
 		const sessionId = this.options.getCurrentSessionId();
 		if (!sessionId) {
@@ -144,16 +196,33 @@ export class TeamManager {
 		return sessionId;
 	}
 
-	assertLeadControl(teamName: string): Team {
-		const team = this.getTeam(teamName);
+	assertLeadControl(teamName?: string): Team {
+		const resolvedTeamName = this.resolveRequestedTeamName(teamName);
+		const team = this.getTeam(resolvedTeamName);
 		if (!team) {
-			throw new Error(`Team not found: ${teamName}`);
+			throw new Error(`Team not found: ${resolvedTeamName}`);
 		}
 		const sessionId = this.requireLeadSessionId();
 		if (team.leadSessionId !== sessionId) {
-			throw new Error(`Only the lead session may mutate team "${teamName}".`);
+			throw new Error(`Only the lead session may mutate team "${resolvedTeamName}".`);
 		}
 		return team;
+	}
+
+	assertTeamAccess(teamName?: string): Team {
+		const resolvedTeamName = this.resolveRequestedTeamName(teamName);
+		const team = this.getTeam(resolvedTeamName);
+		if (!team) {
+			throw new Error(`Team not found: ${resolvedTeamName}`);
+		}
+		const teammateTeamName = this.options.getCurrentTeammateTeamName?.() ?? null;
+		if (teammateTeamName) {
+			if (team.name !== teammateTeamName) {
+				throw new Error(`Teammates may only access their own team: ${teammateTeamName}`);
+			}
+			return team;
+		}
+		return this.assertLeadControl(resolvedTeamName);
 	}
 
 	bootstrap(): void {
@@ -181,20 +250,34 @@ export class TeamManager {
 		});
 	}
 
+	private buildAvailableTeamName(requestedTeamName: string): string {
+		validateSanitizedTeamName(requestedTeamName);
+		if (!this.teamDirExists(requestedTeamName)) {
+			return requestedTeamName;
+		}
+		for (let suffix = 2; suffix < 10_000; suffix++) {
+			const candidate = `${requestedTeamName}-${suffix}`;
+			validateSanitizedTeamName(candidate);
+			if (!this.teamDirExists(candidate)) {
+				return candidate;
+			}
+		}
+		throw new Error(`Could not generate an available team name for: ${requestedTeamName}`);
+	}
+
 	createTeam(input: { team_name: string; description?: string; default_model?: string }): Team {
 		return this.withRootLock(() => {
 			const sessionId = this.requireLeadSessionId();
-			const teamName = input.team_name.trim();
-			if (!teamName) {
+			const requestedTeamName = input.team_name.trim();
+			if (!requestedTeamName) {
 				throw new Error("team_name is required");
 			}
+			validateSanitizedTeamName(requestedTeamName);
 			const activeTeam = this.getActiveTeam();
 			if (activeTeam) {
 				throw new Error(`Only one active team is allowed per lead session. Active team: ${activeTeam.name}`);
 			}
-			if (this.teamDirExists(teamName)) {
-				throw new Error(`Team name already exists on disk and cannot be reused in this pass: ${teamName}`);
-			}
+			const teamName = this.buildAvailableTeamName(requestedTeamName);
 			const now = this.now();
 			const team: Team = {
 				name: teamName,
@@ -210,6 +293,15 @@ export class TeamManager {
 		});
 	}
 
+	private findMemberIndexByName(team: Team, agentName: string): number {
+		for (let index = team.members.length - 1; index >= 0; index--) {
+			if (team.members[index]?.name.toLowerCase() === agentName.toLowerCase()) {
+				return index;
+			}
+		}
+		return -1;
+	}
+
 	registerTeammate(teamName: string, member: Omit<TeamMember, "updatedAt">): TeamMember {
 		return this.withRootLock(() => {
 			const team = this.assertLeadControl(teamName);
@@ -220,43 +312,56 @@ export class TeamManager {
 			if (existingLive?.status === "running" && existingLive.id !== member.agentId) {
 				throw new Error(`Agent name already in use by a running agent: ${member.name}`);
 			}
-			if (team.members.some((existing) => existing.name.toLowerCase() === member.name.toLowerCase() && existing.status === "running")) {
+			const existingIndex = this.findMemberIndexByName(team, member.name);
+			if (existingIndex !== -1 && team.members[existingIndex]?.status === "running" && team.members[existingIndex]?.agentId !== member.agentId) {
 				throw new Error(`Teammate name already active in team "${teamName}": ${member.name}`);
 			}
 			const persisted: TeamMember = {
 				...member,
 				updatedAt: this.now(),
+				lastSummary: existingIndex !== -1 ? team.members[existingIndex]?.lastSummary : member.lastSummary,
 			};
-			team.members.push(persisted);
+			if (existingIndex !== -1) {
+				team.members[existingIndex] = persisted;
+			} else {
+				team.members.push(persisted);
+			}
 			this.writeTeam(team);
 			return persisted;
 		});
 	}
 
-	checkTeammate(teamName: string, agentName: string): {
-		teamName: string;
-		effectiveModel?: string;
-		status: AgentStatus;
-		lastSummary?: string;
-		member: TeamMember;
-		state: TeamState;
-	} {
-		const team = this.getTeam(teamName);
+	private resolveLiveTeammate(member: TeamMember): RegisteredAgent | undefined {
+		return this.options.registry.resolve(member.agentId) ?? this.options.registry.resolve(member.name);
+	}
+
+	checkTeammate(teamName: string | undefined, agentName: string): CheckedTeammate {
+		const resolvedTeamName = this.resolveRequestedTeamName(teamName);
+		const team = this.getTeam(resolvedTeamName);
 		if (!team) {
-			throw new Error(`Team not found: ${teamName}`);
+			throw new Error(`Team not found: ${resolvedTeamName}`);
 		}
-		const member = team.members.find((entry) => entry.name.toLowerCase() === agentName.toLowerCase());
+		const memberIndex = this.findMemberIndexByName(team, agentName);
+		const member = memberIndex !== -1 ? team.members[memberIndex] : undefined;
 		if (!member) {
-			throw new Error(`Teammate not found in team "${teamName}": ${agentName}`);
+			throw new Error(`Teammate not found in team "${resolvedTeamName}": ${agentName}`);
 		}
-		const live = this.options.registry.resolve(member.agentId);
+		const live = this.resolveLiveTeammate(member);
+		const resolvedStatus = live?.status ?? member.status;
 		return {
 			teamName: team.name,
 			effectiveModel: member.model ?? team.defaultModel,
-			status: live?.status ?? member.status,
+			status: resolvedStatus,
 			lastSummary: live?.result ?? member.lastSummary,
-			member: live ? { ...member, status: live.status } : member,
+			member: live ? { ...member, agentId: live.id, status: live.status } : member,
 			state: team.state,
+			sessionFile: live?.sessionFile,
+			lifecycle: describeTeammateLifecycle({
+				status: resolvedStatus,
+				sessionFile: live?.sessionFile,
+				acceptsFollowUps: Boolean(live?.rpcHandle),
+				active: team.state === "active",
+			}),
 		};
 	}
 
@@ -292,7 +397,7 @@ export class TeamManager {
 		});
 	}
 
-	shutdownTeam(teamName: string, reason?: string): Team {
+	shutdownTeam(teamName?: string, reason?: string): Team {
 		return this.withRootLock(() => {
 			const team = this.assertLeadControl(teamName);
 			if (team.state === "shutdown") {

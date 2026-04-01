@@ -75,7 +75,8 @@ describe("coordinator system prompt", { skip: !available ? "modules not availabl
 		assert.ok(prompt.includes("task_create"), "should mention task_create");
 		assert.ok(prompt.includes("send_message"), "should mention send_message tool");
 		assert.ok(prompt.includes("task_stop"), "should mention task_stop tool");
-		assert.ok(prompt.includes("running-only"), "should document running-only send_message");
+		assert.ok(prompt.includes("resume an idle teammate"), "should document teammate continuation");
+		assert.ok(prompt.includes("notifications are the primary coordination loop"), "should guide notification-first coordination");
 		assert.ok(prompt.includes("<task-notification>"), "should describe notification format");
 		assert.ok(prompt.includes("### Task Workflow"), "should have workflow section");
 		assert.ok(prompt.includes("### Concurrency"), "should have concurrency section");
@@ -111,8 +112,9 @@ describe("coordinator system prompt", { skip: !available ? "modules not availabl
 			assert.ok(prompt.includes(required), `prompt should include ${required}`);
 			assert.ok(coordinatorAgent.includes(required), `builtin coordinator should include ${required}`);
 		}
-		assert.ok(prompt.includes("running-only"), "prompt should document running-only send_message");
-		assert.ok(coordinatorAgent.includes("running teammates"), "builtin coordinator should document running-only send_message");
+		assert.ok(prompt.includes("resume an idle teammate"), "prompt should document teammate continuation");
+		assert.ok(coordinatorAgent.includes("resume an idle teammate"), "builtin coordinator should document teammate continuation");
+		assert.ok(prompt.includes("notifications are the primary coordination loop"), "prompt should emphasize notification-first coordination");
 		assert.ok(!prompt.includes("--coordinator"), "prompt should not require a coordinator flag");
 		assert.ok(!coordinatorAgent.includes("--coordinator"), "builtin coordinator should not require a coordinator flag");
 	});

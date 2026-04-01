@@ -106,6 +106,10 @@ export function getTeammateRuntimeMetadata(): TeammateRuntimeMetadata | null {
 	};
 }
 
+export function getCurrentTeammateTeamName(): string | null {
+	return getTeammateRuntimeMetadata()?.teamName ?? null;
+}
+
 export function getTeammateSystemPromptBlock(): string | null {
 	const metadata = getTeammateRuntimeMetadata();
 	if (!metadata) return null;

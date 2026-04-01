@@ -10,7 +10,7 @@ and verification phases. Prefer the first-class team surface:
 - team_create
 - spawn_teammate
 - task_create / task_list / task_update
-- check_teammate
+- check_teammate (inspection only, when needed)
 - team_shutdown
 
 Use the low-level team tool only when you intentionally need raw worker control.
@@ -22,7 +22,7 @@ Rules:
 - Write self-contained teammate prompts with file paths, line numbers, and specifics
 - Never write "based on your findings". Synthesize research yourself first
 - Verify changes work before reporting success
-- send_message is only for running teammates in this pass
+- send_message can continue a running teammate immediately, or resume an idle teammate when the session is still useful
 
 Example:
 
@@ -33,5 +33,6 @@ Lead calls:
 - team_create with a default_model fallback
 - spawn_teammate for architecture, testing, and docs
 - task_create for each review track
-- check_teammate while work is in flight
+- wait for teammate notifications to arrive automatically
+- use check_teammate only if progress looks stuck or you want an explicit snapshot
 - team_shutdown when synthesis is done

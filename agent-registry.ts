@@ -8,6 +8,7 @@
 
 import type { Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
+import type { RuntimeRole, TeammateRuntimeMetadata } from "./coordinator.js";
 
 // =============================================================================
 // Types
@@ -32,6 +33,9 @@ export interface RegisteredAgent {
 	sessionFile?: string;
 	asyncDir?: string;
 	cwd?: string;
+	model?: string;
+	runtimeRole?: RuntimeRole;
+	teamMetadata?: TeammateRuntimeMetadata;
 }
 
 export type AgentStatus = RegisteredAgent["status"];
@@ -84,17 +88,33 @@ export class AgentRegistry {
 		return this.agents.get(nameOrId);
 	}
 
+	private shouldIgnoreStatusUpdate(current: AgentStatus, next: AgentStatus): boolean {
+		if (current === next) return false;
+		if (current === "running") return false;
+		return true;
+	}
+
 	/**
 	 * Update the status of a registered agent.
+	 *
+	 * Once an agent reaches a terminal state, later duplicate process-exit events
+	 * must not regress it to a different terminal state. This prevents stop/timeout
+	 * decisions from being overwritten by late completion/failure races.
 	 */
 	updateStatus(id: string, status: AgentStatus, result?: string): void {
 		const agent = this.agents.get(id);
 		if (!agent) return;
+		if (this.shouldIgnoreStatusUpdate(agent.status, status)) {
+			if (agent.result === undefined && result !== undefined) {
+				agent.result = result;
+			}
+			return;
+		}
 		agent.status = status;
 		if (result !== undefined) {
 			agent.result = result;
 		}
-		if (status !== "running") {
+		if (status !== "running" && agent.endTime === undefined) {
 			agent.endTime = Date.now();
 		}
 	}
@@ -120,6 +140,12 @@ export class AgentRegistry {
 		return [...this.agents.values()]
 			.filter((a) => a.name)
 			.map((a) => `${a.name} (${a.status})`);
+	}
+
+	patch(id: string, changes: Partial<Omit<RegisteredAgent, "id">>): void {
+		const agent = this.agents.get(id);
+		if (!agent) return;
+		Object.assign(agent, changes);
 	}
 
 	/**

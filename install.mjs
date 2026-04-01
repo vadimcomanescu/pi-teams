@@ -101,8 +101,21 @@ Primary lead tools:
 Advanced worker tools:
   • team            - Delegate raw worker execution (single, chain, parallel)
   • team_status     - Check async raw worker run status
-  • send_message    - Follow up with a running teammate or worker
+  • send_message    - Follow up with a running teammate, or resume an idle teammate with a session
   • task_stop       - Stop a running teammate or worker
+
+Notification-first coordination:
+  • Teammate completions arrive automatically as <task-notification> messages
+  • Omit team_name after team_create, follow-up tools resolve the current team
+  • Use check_teammate only when you need an explicit inspection snapshot
+
+Operator visibility commands:
+  • /team [team-name] - Show the active team, teammates, and shared tasks
+  • /workers          - List running workers in the current lead session
+  • /stop-all         - Stop all running workers in the current lead session
+
+Agents Manager shortcut:
+  • Ctrl+Shift+A      - Open the Agents Manager overlay
 
 Documentation: ${EXTENSION_DIR}/README.md
 `);
