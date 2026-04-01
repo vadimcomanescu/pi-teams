@@ -1,14 +1,14 @@
 /**
- * Subagent Tool
+ * Team Tool
  *
- * Full-featured subagent with sync and async modes.
+ * Full-featured worker delegation with sync and async modes.
  * - Sync (default): Streams output, renders markdown, tracks usage
  * - Async: Background execution, emits events when done
  *
  * Modes: single (agent + task), parallel (tasks[]), chain (chain[] with {previous})
  * Toggle: async parameter (default: false, configurable via config.json)
  *
- * Config file: ~/.pi/agent/extensions/subagent/config.json
+ * Config file: ~/.pi/agent/extensions/pi-teams/config.json
  *   { "asyncByDefault": true }
  */
 
@@ -21,20 +21,20 @@ import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { discoverAgents } from "./agents.js";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.js";
 import { cleanupOldChainDirs } from "./settings.js";
-import { renderWidget, renderSubagentResult } from "./render.js";
-import { SubagentParams, StatusParams } from "./schemas.js";
+import { renderWidget, renderTeamResult } from "./render.js";
+import { TeamParams, StatusParams } from "./schemas.js";
 import { findByPrefix, readStatus } from "./utils.js";
-import { createSubagentExecutor } from "./subagent-executor.js";
+import { createTeamExecutor } from "./team-executor.js";
 import { createAsyncJobTracker } from "./async-job-tracker.js";
 import { createResultWatcher } from "./result-watcher.js";
 import { registerSlashCommands } from "./slash-commands.js";
 import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge.js";
-import { registerSlashSubagentBridge } from "./slash-bridge.js";
+import { registerSlashTeamBridge } from "./slash-bridge.js";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.js";
 import {
 	type Details,
 	type ExtensionConfig,
-	type SubagentState,
+	type TeamState,
 	ASYNC_DIR,
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
@@ -42,35 +42,56 @@ import {
 	WIDGET_KEY,
 } from "./types.js";
 import { AgentRegistry } from "./agent-registry.js";
-import { isCoordinatorMode, setCoordinatorMode, getCoordinatorSettings } from "./coordinator.js";
+import {
+	getCoordinatorSettings,
+	getRuntimeRole,
+	getTeammateSystemPromptBlock,
+	isLeadRuntimeRole,
+	setCoordinatorMode,
+} from "./coordinator.js";
 import { getCoordinatorSystemPrompt } from "./coordinator-prompt.js";
 import { createTaskStopTool } from "./task-stop-tool.js";
 import { createSendMessageTool } from "./send-message-tool.js";
+import { createLifecycleDedupe } from "./lifecycle-dedupe.js";
+import { TeamManager } from "./team-manager.js";
+import { TaskStore } from "./task-store.js";
+import {
+	createCheckTeammateTool,
+	createSpawnTeammateTool,
+	createTeamCreateTool,
+	createTeamShutdownTool,
+} from "./team-tools.js";
+import {
+	createTaskCreateTool,
+	createTaskListTool,
+	createTaskReadTool,
+	createTaskUpdateTool,
+} from "./task-tools.js";
 
 /**
- * Derive subagent session base directory from parent session file.
+ * Derive worker session base directory from parent session file.
  * If parent session is ~/.pi/agent/sessions/abc123.jsonl,
  * returns ~/.pi/agent/sessions/abc123/ as the base.
  * Callers add runId to create the actual session root: abc123/{runId}/
  * Falls back to a unique temp directory if no parent session.
  */
-function getSubagentSessionRoot(parentSessionFile: string | null): string {
+function getTeamSessionRoot(parentSessionFile: string | null): string {
 	if (parentSessionFile) {
 		const baseName = path.basename(parentSessionFile, ".jsonl");
 		const sessionsDir = path.dirname(parentSessionFile);
 		return path.join(sessionsDir, baseName);
 	}
-	return fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-session-"));
+	return fs.mkdtempSync(path.join(os.tmpdir(), "pi-team-session-"));
 }
 
 function loadConfig(): ExtensionConfig {
-	const configPath = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent", "config.json");
+	const configPath = path.join(os.homedir(), ".pi", "agent", "extensions", "pi-teams", "config.json");
 	try {
 		if (fs.existsSync(configPath)) {
 			return JSON.parse(fs.readFileSync(configPath, "utf-8")) as ExtensionConfig;
 		}
 	} catch (error) {
-		console.error(`Failed to load subagent config from '${configPath}':`, error);
+		console.error(`Failed to load pi-teams config from '${configPath}':`, error);
 	}
 	return {};
 }
@@ -121,7 +142,7 @@ function rebuildSlashResultContainer(
 	container.addChild(new Spacer(1));
 	const boxTheme = isSlashResultRunning(result) ? "toolPendingBg" : isSlashResultError(result) ? "toolErrorBg" : "toolSuccessBg";
 	const box = new Box(1, 1, (text: string) => theme.bg(boxTheme, text));
-	box.addChild(renderSubagentResult(result, options, theme));
+	box.addChild(renderTeamResult(result, options, theme));
 	container.addChild(box);
 }
 
@@ -143,18 +164,31 @@ function createSlashResultComponent(
 	return container;
 }
 
-export default function registerSubagentExtension(pi: ExtensionAPI): void {
+export default function registerTeamExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(RESULTS_DIR);
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
-	// Coordinator mode is always active — the LLM gets the coordinator
-	// system prompt and tools (subagent, send_message, task_stop) automatically.
-	// The user just says "build a team" or "use workers" and it works.
+	const runtimeRole = getRuntimeRole();
+	const isLeadRuntime = isLeadRuntimeRole();
+
 	pi.on("before_agent_start", (event) => {
-		return {
-			systemPrompt: getCoordinatorSystemPrompt(event.systemPrompt),
-		};
+		if (runtimeRole === "lead") {
+			return {
+				systemPrompt: getCoordinatorSystemPrompt(event.systemPrompt),
+			};
+		}
+		if (runtimeRole === "teammate") {
+			const teammateBlock = getTeammateSystemPromptBlock();
+			if (teammateBlock) {
+				return {
+					systemPrompt: event.systemPrompt
+						? `${event.systemPrompt}\n\n${teammateBlock}`
+						: teammateBlock,
+				};
+			}
+		}
+		return undefined;
 	});
 
 	const config = loadConfig();
@@ -162,7 +196,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
 
-	const state: SubagentState = {
+	const state: TeamState = {
 		baseCwd: process.cwd(),
 		currentSessionId: null,
 		asyncJobs: new Map(),
@@ -188,15 +222,51 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	primeExistingResults();
 
 	const registry = new AgentRegistry();
+	const lifecycleDedupe = createLifecycleDedupe();
+	const emitTeamCompletion = (payload: {
+		id: string;
+		agent: string;
+		name?: string;
+		status: "completed" | "failed" | "stopped" | "timed_out";
+		summary: string;
+		exitCode?: number;
+		usage?: { totalTokens?: number; toolUses?: number; durationMs?: number };
+	}) => {
+		pi.events.emit("team:complete", {
+			id: payload.id,
+			agent: payload.agent,
+			name: payload.name,
+			status: payload.status,
+			success: payload.status === "completed",
+			summary: payload.summary,
+			exitCode: payload.exitCode ?? (payload.status === "completed" ? 0 : 1),
+			timestamp: Date.now(),
+			usage: payload.usage,
+		});
+	};
+	const teamManager = new TeamManager({
+		registry,
+		getCurrentSessionId: () => state.currentSessionId,
+		onMemberStopped: (member, team, reason) => {
+			emitTeamCompletion({
+				id: member.agentId,
+				agent: member.agentType,
+				name: member.name,
+				status: "stopped",
+				summary: reason ?? `Team "${team.name}" stopped by lead session`,
+			});
+		},
+	});
+	const createTaskStore = (teamName: string) => new TaskStore(teamName, teamManager.getTasksPath(teamName));
 
 	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(state, ASYNC_DIR);
-	const executor = createSubagentExecutor({
+	const executor = createTeamExecutor({
 		pi,
 		state,
 		config,
 		asyncByDefault,
 		tempArtifactsDir,
-		getSubagentSessionRoot,
+		getTeamSessionRoot,
 		expandTilde,
 		discoverAgents,
 		registry,
@@ -208,7 +278,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return createSlashResultComponent(details, options, theme);
 	});
 
-	const slashBridge = registerSlashSubagentBridge({
+	const slashBridge = registerSlashTeamBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
 		execute: (id, params, signal, onUpdate, ctx) =>
@@ -252,10 +322,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	const tool: ToolDefinition<typeof SubagentParams, Details> = {
-		name: "subagent",
-		label: "Subagent",
-		description: `Delegate to subagents or manage agent definitions.
+	const tool: ToolDefinition<typeof TeamParams, Details> = {
+		name: "team",
+		label: "Team",
+		description: `Delegate to workers or manage agent definitions.
 
 EXECUTION (use exactly ONE mode):
 • SINGLE: { agent, task } - one task
@@ -277,7 +347,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 • { action: "update", agent: "name", config: { ... } } - merge
 • { action: "delete", agent: "name" }
 • Use chainName for chain operations`,
-		parameters: SubagentParams,
+		parameters: TeamParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
 			return executor.execute(id, params, signal, onUpdate, ctx);
@@ -287,7 +357,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 			if (args.action) {
 				const target = args.agent || args.chainName || "";
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
+					`${theme.fg("toolTitle", theme.bold("team "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
 					0, 0,
 				);
 			}
@@ -295,33 +365,33 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 			const asyncLabel = args.async === true && !isParallel ? theme.fg("warning", " [async]") : "";
 			if (args.chain?.length)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}`,
+					`${theme.fg("toolTitle", theme.bold("team "))}chain (${args.chain.length})${asyncLabel}`,
 					0,
 					0,
 				);
 			if (isParallel)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${args.tasks!.length})`,
+					`${theme.fg("toolTitle", theme.bold("team "))}parallel (${args.tasks!.length})`,
 					0,
 					0,
 				);
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${theme.fg("toolTitle", theme.bold("team "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
 				0,
 				0,
 			);
 		},
 
 		renderResult(result, options, theme) {
-			return renderSubagentResult(result, options, theme);
+			return renderTeamResult(result, options, theme);
 		},
 
 	};
 
 	const statusTool: ToolDefinition<typeof StatusParams, Details> = {
-		name: "subagent_status",
-		label: "Subagent Status",
-		description: "Inspect async subagent run status and artifacts",
+		name: "team_status",
+		label: "Team Status",
+		description: "Inspect async worker run status and artifacts",
 		parameters: StatusParams,
 
 		async execute(_id, params, _signal, _onUpdate, _ctx) {
@@ -356,7 +426,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 			if (asyncDir) {
 				const status = readStatus(asyncDir);
-				const logPath = path.join(asyncDir, `subagent-log-${resolvedId ?? "unknown"}.md`);
+				const logPath = path.join(asyncDir, `team-log-${resolvedId ?? "unknown"}.md`);
 				const eventsPath = path.join(asyncDir, "events.jsonl");
 				if (status) {
 					const stepsTotal = status.steps?.length ?? 1;
@@ -411,16 +481,70 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 	pi.registerTool(tool);
 	pi.registerTool(statusTool);
-	pi.registerTool(createTaskStopTool(registry));
-	pi.registerTool(createSendMessageTool(registry));
 
-	registerSlashCommands(pi, state, registry);
+	if (isLeadRuntime) {
+		pi.registerTool(createSendMessageTool(registry));
+		pi.registerTool(createTaskStopTool(registry, (agent) => {
+			emitTeamCompletion({
+				id: agent.id,
+				agent: agent.agent,
+				name: agent.name,
+				status: "stopped",
+				summary: agent.summary,
+			});
+		}));
+		pi.registerTool(createTeamCreateTool(teamManager));
+		pi.registerTool(createSpawnTeammateTool({
+			teamManager,
+			listAssignedTasks: (teamName, teammateName) => createTaskStore(teamName)
+				.listTasks()
+				.filter((task) => task.owner?.toLowerCase() === teammateName.toLowerCase()),
+			spawnTeammate: async (request, ctx, signal) => {
+				const callId = `teammate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+				const result = await executor.execute(callId, {
+					agent: "worker",
+					task: request.prompt,
+					name: request.name,
+					cwd: request.cwd,
+					model: request.effectiveModel,
+					clarify: false,
+					async: false,
+					runtimeRole: "teammate",
+					teamMetadata: {
+						teamName: request.teamName,
+						teammateNames: request.teammateNames,
+						assignedTaskIds: request.assignedTaskIds,
+						configPath: request.configPath,
+						tasksPath: request.tasksPath,
+					},
+				}, signal, undefined, ctx);
+				if (result.isError || !result.details?.asyncId) {
+					throw new Error(result.content.map((item) => item.type === "text" ? item.text : "").join("\n") || "Failed to spawn teammate");
+				}
+				return {
+					agentId: result.details.asyncId,
+					effectiveModel: request.effectiveModel,
+				};
+			},
+		}));
+		pi.registerTool(createCheckTeammateTool(teamManager));
+		pi.registerTool(createTeamShutdownTool(teamManager));
+		pi.registerTool(createTaskCreateTool({ teamManager, createTaskStore }));
+		pi.registerTool(createTaskListTool({ teamManager, createTaskStore }));
+		pi.registerTool(createTaskReadTool({ teamManager, createTaskStore }));
+		pi.registerTool(createTaskUpdateTool({ teamManager, createTaskStore }));
+		registerSlashCommands(pi, state, {
+			registry,
+			teamManager,
+			createTaskStore,
+		});
+	}
 
-	pi.events.on("subagent:started", (data: unknown) => {
-		handleStarted(data);
+	const handleAgentStartedEvent = (data: unknown) => {
 		const d = data as { id?: string; agent?: string; name?: string; task?: string; _coordinatorManaged?: boolean };
-		// Coordinator-managed agents are already registered via onSpawn with rpcHandle
-		if (d.id && !d._coordinatorManaged && !registry.resolve(d.id)) {
+		if (!d.id || !lifecycleDedupe.shouldProcess(`started:${d.id}`)) return;
+		handleStarted(data);
+		if (!d._coordinatorManaged && !registry.resolve(d.id)) {
 			try {
 				registry.register({
 					id: d.id,
@@ -434,17 +558,21 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 				// Name collision or duplicate ID
 			}
 		}
-	});
-	pi.events.on("subagent:complete", (data: unknown) => {
-		handleComplete(data);
-		const d = data as { id?: string; success?: boolean; summary?: string };
-		if (d.id) {
-			registry.updateStatus(d.id, d.success ? "completed" : "failed", d.summary);
-		}
-	});
+	};
+	const handleAgentCompleteEvent = (data: unknown) => {
+		const d = data as { id?: string; success?: boolean; summary?: string; status?: "completed" | "failed" | "stopped" | "timed_out" };
+		if (!d.id) return;
+		const status = d.status ?? (d.success === false ? "failed" : "completed");
+		if (!lifecycleDedupe.shouldProcess(`complete:${d.id}:${status}`)) return;
+		handleComplete({ ...d, success: status === "completed" });
+		registry.updateStatus(d.id, status, d.summary);
+		teamManager.recordTeammateStatus(d.id, status, d.summary);
+	};
+	pi.events.on("team:started", handleAgentStartedEvent);
+	pi.events.on("team:complete", handleAgentCompleteEvent);
 
 	pi.on("tool_result", (event, ctx) => {
-		if (event.toolName !== "subagent") return;
+		if (event.toolName !== "team") return;
 		if (!ctx.hasUI) return;
 		state.lastUiContext = ctx;
 		if (state.asyncJobs.size > 0) {
@@ -475,19 +603,44 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionState(ctx);
-		// Coordinator capabilities are always available. The timeout sweeper
-		// runs unconditionally (no-op when no workers are registered).
-		setCoordinatorMode(true);
-		registry.startTimeoutSweeper(getCoordinatorSettings().workerTimeoutMs);
+		setCoordinatorMode(isLeadRuntime);
+		if (isLeadRuntime) {
+			teamManager.bootstrap();
+			registry.startTimeoutSweeper(getCoordinatorSettings().workerTimeoutMs, 30_000, (agent) => {
+				emitTeamCompletion({
+					id: agent.id,
+					agent: agent.agentType,
+					name: agent.name,
+					status: "timed_out",
+					summary: `Timed out after ${getCoordinatorSettings().workerTimeoutMs}ms`,
+				});
+			});
+		}
 	});
 	pi.on("session_switch", (_event, ctx) => {
-		registry.dispose(); // stopAll + stop sweeper
+		if (isLeadRuntime) {
+			teamManager.shutdownActiveTeam("Lead session switched");
+		}
+		registry.dispose();
 		resetSessionState(ctx);
+		if (isLeadRuntime) {
+			teamManager.bootstrap();
+		}
 	});
 	pi.on("session_branch", (_event, ctx) => {
+		if (isLeadRuntime) {
+			teamManager.shutdownActiveTeam("Lead session branched");
+		}
+		registry.dispose();
 		resetSessionState(ctx);
+		if (isLeadRuntime) {
+			teamManager.bootstrap();
+		}
 	});
 	pi.on("session_shutdown", () => {
+		if (isLeadRuntime) {
+			teamManager.shutdownActiveTeam("Lead session shutdown");
+		}
 		registry.dispose();
 		stopResultWatcher();
 		if (state.poller) clearInterval(state.poller);

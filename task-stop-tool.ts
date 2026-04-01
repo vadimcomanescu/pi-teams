@@ -27,6 +27,7 @@ export const TaskStopParams = Type.Object({
 
 export function createTaskStopTool(
 	registry: AgentRegistry,
+	onStopped?: (agent: { id: string; agent: string; name?: string; status: "stopped"; summary: string }) => void,
 ): ToolDefinition<typeof TaskStopParams> {
 	return {
 		name: "task_stop",
@@ -64,9 +65,15 @@ export function createTaskStopTool(
 				};
 			}
 
-			registry.stopAgent(agent.id);
-
 			const displayName = agent.name ?? agent.id;
+			registry.stopAgent(agent.id);
+			onStopped?.({
+				id: agent.id,
+				agent: agent.agentType,
+				name: agent.name,
+				status: "stopped",
+				summary: reason ? `Stopped by lead: ${reason}` : "Stopped by lead",
+			});
 			return {
 				content: [
 					{

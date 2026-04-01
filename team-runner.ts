@@ -12,10 +12,10 @@ import {
 	DEFAULT_MAX_OUTPUT,
 	type MaxOutputConfig,
 	truncateOutput,
-	getSubagentDepthEnv,
+	getTeamDepthEnv,
 } from "./types.js";
 import {
-	type RunnerSubagentStep as SubagentStep,
+	type RunnerTeamStep as TeamStep,
 	type RunnerStep,
 	isParallelGroup,
 	flattenSteps,
@@ -24,8 +24,9 @@ import {
 	MAX_PARALLEL_CONCURRENCY,
 } from "./parallel-utils.js";
 import { buildPiArgs, cleanupTempDir } from "./pi-args.js";
+import { buildRuntimeEnv } from "./coordinator.js";
 
-interface SubagentRunConfig {
+interface TeamRunConfig {
 	id: string;
 	steps: RunnerStep[];
 	resultPath: string;
@@ -110,7 +111,7 @@ function runPiStreaming(
 ): Promise<{ stdout: string; exitCode: number | null }> {
 	return new Promise((resolve) => {
 		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
-		const spawnEnv = { ...process.env, ...(env ?? {}), ...getSubagentDepthEnv() };
+		const spawnEnv = { ...process.env, ...(env ?? {}), ...getTeamDepthEnv() };
 		const spawnSpec = getPiSpawnCommand(args, piPackageRoot ? { piPackageRoot } : undefined);
 		const child = spawn(spawnSpec.command, spawnSpec.args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: spawnEnv });
 		let stdout = "";
@@ -230,7 +231,7 @@ function writeRunLog(
 	},
 ): void {
 	const lines: string[] = [];
-	lines.push(`# Subagent run ${input.id}`);
+	lines.push(`# Team run ${input.id}`);
 	lines.push("");
 	lines.push(`- **Mode:** ${input.mode}`);
 	lines.push(`- **CWD:** ${input.cwd}`);
@@ -278,7 +279,7 @@ interface SingleStepContext {
 
 /** Run a single pi agent step, returning output and metadata */
 async function runSingleStep(
-	step: SubagentStep,
+	step: TeamStep,
 	ctx: SingleStepContext,
 ): Promise<{ agent: string; output: string; exitCode: number | null; artifactPaths?: ArtifactPaths }> {
 	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
@@ -310,7 +311,13 @@ async function runSingleStep(
 		}
 	}
 
-	const result = await runPiStreaming(args, step.cwd ?? ctx.cwd, ctx.outputFile, env, ctx.piPackageRoot);
+	const result = await runPiStreaming(
+		args,
+		step.cwd ?? ctx.cwd,
+		ctx.outputFile,
+		{ ...env, ...buildRuntimeEnv("raw-worker") },
+		ctx.piPackageRoot,
+	);
 	cleanupTempDir(tempDir);
 
 	const output = (result.stdout || "").trim();
@@ -351,7 +358,7 @@ async function runSingleStep(
 	return { agent: step.agent, output: outputForSummary, exitCode: result.exitCode, artifactPaths };
 }
 
-async function runSubagent(config: SubagentRunConfig): Promise<void> {
+async function runTeam(config: TeamRunConfig): Promise<void> {
 	const { id, steps, resultPath, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig } =
 		config;
 	let previousOutput = "";
@@ -361,7 +368,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const asyncDir = config.asyncDir;
 	const statusPath = path.join(asyncDir, "status.json");
 	const eventsPath = path.join(asyncDir, "events.jsonl");
-	const logPath = path.join(asyncDir, `subagent-log-${id}.md`);
+	const logPath = path.join(asyncDir, `team-log-${id}.md`);
 	let previousCumulativeTokens: TokenUsage = { input: 0, output: 0, total: 0 };
 	let latestSessionFile: string | undefined;
 
@@ -420,7 +427,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	appendJsonl(
 		eventsPath,
 		JSON.stringify({
-			type: "subagent.run.started",
+			type: "team.run.started",
 			ts: overallStartTime,
 			runId: id,
 			mode: statusPayload.mode,
@@ -456,7 +463,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			writeJson(statusPath, statusPayload);
 
 			appendJsonl(eventsPath, JSON.stringify({
-				type: "subagent.parallel.started",
+				type: "team.parallel.started",
 				ts: groupStartTime,
 				runId: id,
 				stepIndex,
@@ -476,7 +483,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					const taskStartTime = Date.now();
 
 					appendJsonl(eventsPath, JSON.stringify({
-						type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent,
+						type: "team.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent,
 					}));
 
 					// Each parallel task gets its own session subdirectory to avoid conflicts
@@ -507,7 +514,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					writeJson(statusPath, statusPayload);
 
 					appendJsonl(eventsPath, JSON.stringify({
-						type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
+						type: singleResult.exitCode === 0 ? "team.step.completed" : "team.step.failed",
 						ts: taskEndTime, runId: id, stepIndex: fi, agent: task.agent,
 						exitCode: singleResult.exitCode, durationMs: taskDuration,
 					}));
@@ -556,7 +563,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			);
 
 			appendJsonl(eventsPath, JSON.stringify({
-				type: "subagent.parallel.completed",
+				type: "team.parallel.completed",
 				ts: Date.now(),
 				runId: id,
 				stepIndex,
@@ -569,7 +576,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 		} else {
 			// === SEQUENTIAL STEP ===
-			const seqStep = step as SubagentStep;
+			const seqStep = step as TeamStep;
 			const stepStartTime = Date.now();
 			statusPayload.currentStep = flatIndex;
 			statusPayload.steps[flatIndex].status = "running";
@@ -580,7 +587,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			writeJson(statusPath, statusPayload);
 
 			appendJsonl(eventsPath, JSON.stringify({
-				type: "subagent.step.started",
+				type: "team.step.started",
 				ts: stepStartTime,
 				runId: id,
 				stepIndex: flatIndex,
@@ -632,7 +639,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			writeJson(statusPath, statusPayload);
 
 			appendJsonl(eventsPath, JSON.stringify({
-				type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
+				type: singleResult.exitCode === 0 ? "team.step.completed" : "team.step.failed",
 				ts: stepEndTime,
 				runId: id,
 				stepIndex: flatIndex,
@@ -714,7 +721,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	appendJsonl(
 		eventsPath,
 		JSON.stringify({
-			type: "subagent.run.completed",
+			type: "team.run.completed",
 			ts: runEndedAt,
 			runId: id,
 			status: statusPayload.state,
@@ -782,18 +789,18 @@ const configArg = process.argv[2];
 if (configArg) {
 	try {
 		const configJson = fs.readFileSync(configArg, "utf-8");
-		const config = JSON.parse(configJson) as SubagentRunConfig;
+		const config = JSON.parse(configJson) as TeamRunConfig;
 		try {
 			fs.unlinkSync(configArg);
 		} catch {
 			// Temp config cleanup is best effort.
 		}
-		runSubagent(config).catch((runErr) => {
-			console.error("Subagent runner error:", runErr);
+		runTeam(config).catch((runErr) => {
+			console.error("Team runner error:", runErr);
 			process.exit(1);
 		});
 	} catch (err) {
-		console.error("Subagent runner error:", err);
+		console.error("Team runner error:", err);
 		process.exit(1);
 	}
 } else {
@@ -804,13 +811,13 @@ if (configArg) {
 	});
 	process.stdin.on("end", () => {
 		try {
-			const config = JSON.parse(input) as SubagentRunConfig;
-			runSubagent(config).catch((runErr) => {
-				console.error("Subagent runner error:", runErr);
+			const config = JSON.parse(input) as TeamRunConfig;
+			runTeam(config).catch((runErr) => {
+				console.error("Team runner error:", runErr);
 				process.exit(1);
 			});
 		} catch (err) {
-			console.error("Subagent runner error:", err);
+			console.error("Team runner error:", err);
 			process.exit(1);
 		}
 	});

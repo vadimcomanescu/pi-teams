@@ -3,13 +3,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ArtifactPaths } from "./types.js";
 
-const TEMP_ARTIFACTS_DIR = path.join(os.tmpdir(), "pi-subagent-artifacts");
+const TEMP_ARTIFACTS_DIR = path.join(os.tmpdir(), "pi-team-artifacts");
 const CLEANUP_MARKER_FILE = ".last-cleanup";
 
 export function getArtifactsDir(sessionFile: string | null): string {
 	if (sessionFile) {
 		const sessionDir = path.dirname(sessionFile);
-		return path.join(sessionDir, "subagent-artifacts");
+		return path.join(sessionDir, "team-artifacts");
 	}
 	return TEMP_ARTIFACTS_DIR;
 }
@@ -84,7 +84,7 @@ export function cleanupAllArtifactDirs(maxAgeDays: number): void {
 	}
 
 	for (const dir of dirs) {
-		const artifactsDir = path.join(sessionsBase, dir, "subagent-artifacts");
+		const artifactsDir = path.join(sessionsBase, dir, "team-artifacts");
 		try {
 			cleanupOldArtifacts(artifactsDir, maxAgeDays);
 		} catch {}

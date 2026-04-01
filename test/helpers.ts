@@ -125,7 +125,7 @@ export function createMockPi(): MockPi {
 /**
  * Create a temporary directory for test use.
  */
-export function createTempDir(prefix = "pi-subagent-test-"): string {
+export function createTempDir(prefix = "pi-team-test-"): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 

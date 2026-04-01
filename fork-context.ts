@@ -1,4 +1,4 @@
-export type SubagentExecutionContext = "fresh" | "fork";
+export type TeamExecutionContext = "fresh" | "fork";
 
 export interface ForkableSessionManager {
 	getSessionFile(): string | undefined;
@@ -10,7 +10,7 @@ export interface ForkContextResolver {
 	sessionFileForIndex(index?: number): string | undefined;
 }
 
-export function resolveSubagentContext(value: unknown): SubagentExecutionContext {
+export function resolveTeamContext(value: unknown): TeamExecutionContext {
 	return value === "fork" ? "fork" : "fresh";
 }
 
@@ -18,7 +18,7 @@ export function createForkContextResolver(
 	sessionManager: ForkableSessionManager,
 	requestedContext: unknown,
 ): ForkContextResolver {
-	if (resolveSubagentContext(requestedContext) !== "fork") {
+	if (resolveTeamContext(requestedContext) !== "fork") {
 		return {
 			sessionFileForIndex: () => undefined,
 		};
@@ -26,12 +26,12 @@ export function createForkContextResolver(
 
 	const parentSessionFile = sessionManager.getSessionFile();
 	if (!parentSessionFile) {
-		throw new Error("Forked subagent context requires a persisted parent session.");
+		throw new Error("Forked team context requires a persisted parent session.");
 	}
 
 	const leafId = sessionManager.getLeafId();
 	if (!leafId) {
-		throw new Error("Forked subagent context requires a current leaf to fork from.");
+		throw new Error("Forked team context requires a current leaf to fork from.");
 	}
 
 	const cachedSessionFiles = new Map<number, string>();
@@ -49,7 +49,7 @@ export function createForkContextResolver(
 				return sessionFile;
 			} catch (error) {
 				const cause = error instanceof Error ? error : new Error(String(error));
-				throw new Error(`Failed to create forked subagent session: ${cause.message}`, { cause });
+				throw new Error(`Failed to create forked team session: ${cause.message}`, { cause });
 			}
 		},
 	};

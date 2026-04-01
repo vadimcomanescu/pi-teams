@@ -3,25 +3,24 @@
 ## [0.12.0] - 2026-03-31
 
 ### Added
-- **Coordinator Mode** (`--coordinator`): Transforms the main LLM into a coordinator that orchestrates worker agents autonomously. The coordinator plans, delegates to workers, synthesizes results, and reports back.
+- **First-class team lifecycle tools**: `team_create`, `spawn_teammate`, `check_teammate`, and `team_shutdown` establish the primary public surface for managing teams of agents.
+- **Shared task tools**: `task_create`, `task_list`, `task_read`, and `task_update` persist team work state so the lead can assign, track, and synthesize work cleanly.
+- **Lead-session coordinator prompt**: Lead sessions now coordinate teams by default, with a team-first prompt focused on teammates, shared tasks, concurrency, and synthesis.
 - **Agent Registry**: Tracks running/completed agents by name and ID. Workers are addressable via name for follow-up messages. Includes timeout sweeper and lifecycle management.
 - **RPC Mode Spawning**: New `spawnMode: "rpc"` for foreground workers with piped stdin. Enables follow-up messages to running workers via JSON protocol.
-- **`send_message` tool**: Send follow-up messages to running RPC workers. Routes by name (case-insensitive) or ID.
-- **`task_stop` tool**: Stop running workers by name or ID. Sends abort command to RPC agents, SIGTERM to others.
-- **Enhanced Notifications**: Coordinator mode uses structured `<task-notification>` XML format with usage stats. Non-coordinator mode unchanged (markdown).
-- **Coordinator System Prompt**: Comprehensive prompt covering task workflow, worker management, concurrency, verification, and prompt-writing guidance.
-- **`name` parameter**: Optional name for spawned agents, making them addressable via `send_message`.
-- **`/workers` command**: List all registered workers with status and duration.
-- **`/stop-all` command**: Stop all running coordinator workers.
-- **Max concurrent workers**: Configurable limit (default: 8) enforced in coordinator mode.
+- **`send_message` tool**: Follow up with a running teammate or worker. Routing is by name (case-insensitive) or ID, and the contract is explicitly running-only.
+- **`task_stop` tool**: Stop a running teammate or worker. Sends abort command to RPC agents, SIGTERM to others.
+- **Enhanced Notifications**: Lead sessions receive structured `<task-notification>` XML with usage stats. Non-lead markdown notifications remain unchanged.
+- **Operator visibility commands**: `/team` shows the active team plus shared tasks, `/workers` lists registered workers, and `/stop-all` stops running workers in the current lead session.
+- **Max concurrent workers**: Configurable limit (default: 8) enforced in lead sessions.
 - **Worker timeout**: Configurable timeout (default: 5 min) with automatic cleanup.
-- **Builtin `coordinator` agent**: Available via `/run coordinator "task"` for on-demand use.
+- **Builtin `coordinator` agent**: Available via `/run coordinator "task"` for explicit coordinator-style delegation when wanted.
 
 ### Changed
-- Package renamed from `pi-subagents` to `pi-teams`.
-- Repository moved to `vadimcomanescu/pi-teams`.
+- Public docs, installer output, prompts, and package metadata now describe pi-teams as an extension for managing teams of agents.
+- The public contract is now team-first. The low-level `team` and `team_status` worker tools are documented as advanced plumbing.
 - `session_switch` now calls `registry.dispose()` (stops all workers + sweeper).
-- Notification system uses `deliverAs: "followUp"` in coordinator mode to prevent mid-turn interruption.
+- Notification system uses `deliverAs: "followUp"` in lead sessions to prevent mid-turn interruption.
 
 ## [Unreleased]
 
@@ -49,12 +48,12 @@
 - `/agents` overlay chain launches no longer bypass the executor for async fallback, fixing a path where async chain errors were silently swallowed.
 
 ### Changed
-- All slash and overlay subagent execution now routes through an event bus request/response protocol (`slash-bridge.ts`), matching the pattern used by pi-prompt-template-model. This replaces both the old `sendUserMessage` relay and the direct `executeChain` call in the overlay handler.
+- All slash and overlay team execution now routes through an event bus request/response protocol (`slash-bridge.ts`), matching the pattern used by pi-prompt-template-model. This replaces both the old `sendUserMessage` relay and the direct `executeChain` call in the overlay handler.
 - Slash launches show a live inline card immediately on start that streams current tool, recent tools, and output in real time, rather than appearing only after completion.
 - `/parallel` now uses the native `tasks` parameter directly instead of wrapping through `{ chain: [{ parallel: tasks }] }`.
 
 ### Added
-- `slash-bridge.ts` — event bus bridge for slash command execution. Manages AbortController lifecycle, cancel-before-start races, and progress streaming via `subagent:slash:*` events.
+- `slash-bridge.ts` — event bus bridge for slash command execution. Manages AbortController lifecycle, cancel-before-start races, and progress streaming via `team:slash:*` events.
 - `slash-live-state.ts` — request-id keyed snapshot store that drives live inline card rendering during execution and restores finalized results from session entries on reload.
 - Clarified README Usage section to distinguish LLM tool parameters from user-facing slash commands.
 
@@ -71,14 +70,14 @@
 ## [0.11.6] - 2026-03-20
 
 ### Added
-- Added `delegate` builtin agent — a lightweight subagent with no model, output, or default reads. Inherits the parent session's model, making it the natural target for prompt-template delegated execution.
+- Added `delegate` builtin agent — a lightweight team with no model, output, or default reads. Inherits the parent session's model, making it the natural target for prompt-template delegated execution.
 
 ## [0.11.5] - 2026-03-20
 
 ### Added
-- Added fork context preamble: tasks run with `context: "fork"` are now wrapped with a default preamble that anchors the subagent to its task, preventing it from continuing the parent conversation. The default is `DEFAULT_FORK_PREAMBLE` in `types.ts`. Internal/programmatic callers can use `wrapForkTask(task, false)` to disable it or pass a custom string (this is not exposed as a tool parameter).
-- Added a prompt-template delegation bridge (`prompt-template-bridge.ts`) on the shared extension event bus. The subagent extension now listens for `prompt-template:subagent:request` and emits correlated `started`/`response`/`update` events, with cwd safety checks and race-safe cancellation handling.
-- Added delegated progress streaming via `prompt-template:subagent:update`, mapped from subagent executor `onUpdate` progress payloads.
+- Added fork context preamble: tasks run with `context: "fork"` are now wrapped with a default preamble that anchors the team to its task, preventing it from continuing the parent conversation. The default is `DEFAULT_FORK_PREAMBLE` in `types.ts`. Internal/programmatic callers can use `wrapForkTask(task, false)` to disable it or pass a custom string (this is not exposed as a tool parameter).
+- Added a prompt-template delegation bridge (`prompt-template-bridge.ts`) on the shared extension event bus. The team extension now listens for `prompt-template:team:request` and emits correlated `started`/`response`/`update` events, with cwd safety checks and race-safe cancellation handling.
+- Added delegated progress streaming via `prompt-template:team:update`, mapped from team executor `onUpdate` progress payloads.
 
 ### Changed
 - Session lifecycle reset now preserves the latest extension context for event-bus delegated runs.
@@ -104,21 +103,21 @@
 - Async launch now fails with explicit errors when the async run directory cannot be created.
 - Share logs now correctly include forked session files even when no session directory exists.
 - Tool-call and result rendering now explicitly show `[fork]` when `context: "fork"` is used, including empty-result responses.
-- `subagent_status` now surfaces async result-file read failures instead of returning a misleading missing-status message.
+- `team_status` now surfaces async result-file read failures instead of returning a misleading missing-status message.
 
 ## [0.11.3] - 2026-03-17
 
 ### Changed
-- Decomposed `index.ts` (1,450 → ~350 lines) into focused modules: `subagent-executor.ts`, `async-job-tracker.ts`, `result-watcher.ts`, `slash-commands.ts`. Shared mutable state centralized in `SubagentState` interface. Three identical session handlers collapsed into one.
-- Extracted shared pi CLI arg-builder (`pi-args.ts`) from duplicated logic in `execution.ts` and `subagent-runner.ts`.
+- Decomposed `index.ts` (1,450 → ~350 lines) into focused modules: `team-executor.ts`, `async-job-tracker.ts`, `result-watcher.ts`, `slash-commands.ts`. Shared mutable state centralized in `TeamState` interface. Three identical session handlers collapsed into one.
+- Extracted shared pi CLI arg-builder (`pi-args.ts`) from duplicated logic in `execution.ts` and `team-runner.ts`.
 - Consolidated `mapConcurrent` (canonical in `parallel-utils.ts`, re-exported from `utils.ts`), `aggregateParallelOutputs` (canonical in `parallel-utils.ts` with optional header formatter, re-exported from `settings.ts`), and `parseFrontmatter` (extracted to `frontmatter.ts`).
 
 ## [0.11.2] - 2026-03-11
 
 ### Fixed
-- `--no-skills` was missing from the async runner (`subagent-runner.ts`). PR #41 added skill scoping to the sync path but the async runner spawns pi through its own code path, so background subagents with explicit skills still got the full `<available_skills>` catalog injected.
-- `defaultSessionDir` and `sessionDir` with `~` paths (e.g. `"~/.pi/agent/sessions/subagent/"`) were not expanded — `path.resolve("~/...")` treats `~` as a literal directory name. Added tilde expansion matching the existing pattern in `skills.ts`.
-- Multiple subagent calls within a session would collide when `defaultSessionDir` was configured, since it wasn't appending a unique `runId`. Both `defaultSessionDir` and parent-session-derived paths now get `runId` appended.
+- `--no-skills` was missing from the async runner (`team-runner.ts`). PR #41 added skill scoping to the sync path but the async runner spawns pi through its own code path, so background teams with explicit skills still got the full `<available_skills>` catalog injected.
+- `defaultSessionDir` and `sessionDir` with `~` paths (e.g. `"~/.pi/agent/sessions/team/"`) were not expanded — `path.resolve("~/...")` treats `~` as a literal directory name. Added tilde expansion matching the existing pattern in `skills.ts`.
+- Multiple team calls within a session would collide when `defaultSessionDir` was configured, since it wasn't appending a unique `runId`. Both `defaultSessionDir` and parent-session-derived paths now get `runId` appended.
 
 ### Removed
 - Removed exported `resolveSessionRoot()` function and `SessionRootInput` interface. These were introduced by PR #46 but never called in production — the inline resolution logic diverged (always-on sessions, `runId` appended) making the function's contract misleading. Associated tests and dead code from PR #47 scaffolding also removed from `path-handling.test.ts`.
@@ -126,7 +125,7 @@
 ## [0.11.1] - 2026-03-08
 
 ### Changed
-- **Session persistence**: Subagent sessions are now stored alongside the parent session file instead of in `/tmp`. If the parent session is `~/.pi/agent/sessions/abc123.jsonl`, subagent sessions go to `~/.pi/agent/sessions/abc123/{runId}/run-{N}/`. This enables tracking subagent performance over time, analyzing token usage patterns, and debugging past delegations. Falls back to a unique temp directory when no parent session exists (API/headless mode).
+- **Session persistence**: Team sessions are now stored alongside the parent session file instead of in `/tmp`. If the parent session is `~/.pi/agent/sessions/abc123.jsonl`, team sessions go to `~/.pi/agent/sessions/abc123/{runId}/run-{N}/`. This enables tracking team performance over time, analyzing token usage patterns, and debugging past delegations. Falls back to a unique temp directory when no parent session exists (API/headless mode).
 
 ## [0.11.0] - 2026-02-23
 
@@ -150,10 +149,10 @@
 ### Fixed
 - `mapConcurrent` with `limit=0` returned array of undefined values instead of processing items sequentially. Now clamps limit to at least 1.
 - ANSI background color bleed in truncated text. The `truncLine` function now properly tracks and re-applies all active ANSI styles (bold, colors, etc.) before the ellipsis, preventing style leakage. Also uses `Intl.Segmenter` for correct Unicode/emoji handling. Thanks @monotykamary for identifying the issue.
-- `detectSubagentError` no longer produces false positives when the agent recovers from tool errors. Previously, any error in the last tool result would override exitCode 0→1, even if the agent had already produced complete output. Now only errors AFTER the agent's final text response are flagged. Thanks @marcfargas for the fix and comprehensive test coverage.
+- `detectTeamError` no longer produces false positives when the agent recovers from tool errors. Previously, any error in the last tool result would override exitCode 0→1, even if the agent had already produced complete output. Now only errors AFTER the agent's final text response are flagged. Thanks @marcfargas for the fix and comprehensive test coverage.
 - Parallel mode (`tasks: [...]`) now returns aggregated output from all tasks instead of just a success count. Previously only returned "3/3 succeeded" with actual task outputs lost.
 - Session sharing fallback no longer fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`. The fallback now resolves the main entry point and walks up to find the package root instead of trying to resolve `package.json` directly.
-- Skills from globally-installed npm packages (via `pi install npm:...`) are now discoverable by subagents. Previously only scanned local `.pi/npm/node_modules/` paths, missing the global npm root where pi actually installs packages.
+- Skills from globally-installed npm packages (via `pi install npm:...`) are now discoverable by teams. Previously only scanned local `.pi/npm/node_modules/` paths, missing the global npm root where pi actually installs packages.
 - **Windows compatibility**: Fixed `ENAMETOOLONG` errors when tasks exceed command-line length limits by writing long tasks to temp files using pi's `@file` syntax. Thanks @marcfargas.
 - **Windows compatibility**: Suppressed flashing console windows when spawning async runner processes (`windowsHide: true`).
 - **Windows compatibility**: Fixed pi CLI resolution in async runner by passing `piPackageRoot` through to `getPiSpawnCommand`.
@@ -164,7 +163,7 @@
 ## [0.9.2] - 2026-02-19
 
 ### Fixed
-- TUI crash on async subagent completion: "Rendered line exceeds terminal width." `render.ts` never truncated output to fit the terminal — widget lines (`agents.join(" -> ")`), chain visualizations, skills lists, and task previews could all exceed the terminal width. Added `truncLine` helper using pi-tui's `truncateToWidth`/`visibleWidth` and applied it to every `Text` widget and widget string. Task preview lengths are now dynamic based on terminal width instead of hardcoded.
+- TUI crash on async team completion: "Rendered line exceeds terminal width." `render.ts` never truncated output to fit the terminal — widget lines (`agents.join(" -> ")`), chain visualizations, skills lists, and task previews could all exceed the terminal width. Added `truncLine` helper using pi-tui's `truncateToWidth`/`visibleWidth` and applied it to every `Text` widget and widget string. Task preview lengths are now dynamic based on terminal width instead of hardcoded.
 - Agent Manager scope badge showed `[built]` instead of `[builtin]` in list and detail views. Widened scope column to fit.
 
 ## [0.9.1] - 2026-02-17
@@ -175,7 +174,7 @@
 - Agent Manager TUI guards: delete and edit actions on builtin agents are blocked with an error status. Detail screen hides `[e]dit` from the footer for builtins. Scope badge shows `[builtin]` instead of falling through to `[proj]`.
 - Cloning a builtin agent set the scope to `"builtin"` at runtime (violating the `"user" | "project"` type), causing wrong badge display and the clone inheriting builtin protections until session reload. Now maps to `"user"`.
 - Agent Manager `loadEntries` suppresses builtins overridden by user/project agents, preventing duplicate entries in the TUI list.
-- `BUILTIN_AGENTS_DIR` resolved via `import.meta.url` instead of hardcoded `~/.pi/agent/extensions/subagent/agents` path. Works regardless of where the extension is installed.
+- `BUILTIN_AGENTS_DIR` resolved via `import.meta.url` instead of hardcoded `~/.pi/agent/extensions/team/agents` path. Works regardless of where the extension is installed.
 - `handleCreate` now warns when creating an agent that shadows a builtin (informational, not an error).
 
 ### Changed
@@ -196,19 +195,19 @@
 - **`"builtin"` agent source** — new third tier in agent discovery. Priority: builtin < user < project. Builtin agents appear in listings with a `[builtin]` badge and cannot be modified or deleted through management actions (create a same-named user agent to override instead).
 
 ### Fixed
-- Async subagent session sharing no longer fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`. The runner tried `require.resolve("@mariozechner/pi-coding-agent/package.json")` to find pi's HTML export module, but pi's `exports` map doesn't include that subpath. The fix resolves the package root in the main pi process by walking up from `process.argv[1]` and passes it to the spawned runner through the config, bypassing `require.resolve` entirely. The Windows CLI resolution fallback in `getPiSpawnCommand` benefits from the same walk-up function.
+- Async team session sharing no longer fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`. The runner tried `require.resolve("@mariozechner/pi-coding-agent/package.json")` to find pi's HTML export module, but pi's `exports` map doesn't include that subpath. The fix resolves the package root in the main pi process by walking up from `process.argv[1]` and passes it to the spawned runner through the config, bypassing `require.resolve` entirely. The Windows CLI resolution fallback in `getPiSpawnCommand` benefits from the same walk-up function.
 
 ## [0.8.5] - 2026-02-16
 
 ### Fixed
-- Async subagent execution no longer fails with "jiti not found" on machines without a global `jiti` install. The jiti resolution now tries three strategies: vanilla `jiti`, the `@mariozechner/jiti` fork, and finally resolves `@mariozechner/jiti` from pi's own installation via `process.argv[1]`. Since pi always ships the fork as a dependency, async mode now works out of the box.
+- Async team execution no longer fails with "jiti not found" on machines without a global `jiti` install. The jiti resolution now tries three strategies: vanilla `jiti`, the `@mariozechner/jiti` fork, and finally resolves `@mariozechner/jiti` from pi's own installation via `process.argv[1]`. Since pi always ships the fork as a dependency, async mode now works out of the box.
 - Improved the "jiti not found" error message to explain what's needed and how to fix it.
 
 ## [0.8.4] - 2026-02-13
 
 ### Fixed
-- JSONL artifact files no longer written by default — they duplicated pi's own session files and were the sole cause of `subagent-artifacts` directories growing to 10+ GB. Changed `includeJsonl` default from `true` to `false`. `_output.md` and `_meta.json` still capture the useful data.
-- Artifact cleanup now covers session-based directories, not just the temp dir. Previously `cleanupOldArtifacts` only ran on `os.tmpdir()/pi-subagent-artifacts` at startup, while sync runs (the common path) wrote to `<session-dir>/subagent-artifacts/` which was never cleaned. Now scans all `~/.pi/agent/sessions/*/subagent-artifacts/` dirs on startup and cleans the current session's artifacts dir on session lifecycle events.
+- JSONL artifact files no longer written by default — they duplicated pi's own session files and were the sole cause of `team-artifacts` directories growing to 10+ GB. Changed `includeJsonl` default from `true` to `false`. `_output.md` and `_meta.json` still capture the useful data.
+- Artifact cleanup now covers session-based directories, not just the temp dir. Previously `cleanupOldArtifacts` only ran on `os.tmpdir()/pi-team-artifacts` at startup, while sync runs (the common path) wrote to `<session-dir>/team-artifacts/` which was never cleaned. Now scans all `~/.pi/agent/sessions/*/team-artifacts/` dirs on startup and cleans the current session's artifacts dir on session lifecycle events.
 - JSONL writer now enforces a 50 MB size cap (`maxBytes` on `JsonlWriterDeps`) as defense-in-depth for users who opt into JSONL. Silently stops writing at the cap without pausing the source stream, so the progress tracker keeps working.
 
 ## [0.8.3] - 2026-02-11
@@ -226,7 +225,7 @@
 - Sync JSONL artifact capture now streams lines directly to disk with backpressure handling, preventing unbounded memory growth in long or parallel runs.
 - Execution now defaults `agentScope` to `both`, aligning run behavior with management `list` so project agents shown in discovery execute without explicit scope overrides.
 - Async completion notifications now dedupe at source and notify layers, eliminating duplicate/triple "Background task completed" messages.
-- Async notifications now standardize on canonical `subagent:started` and `subagent:complete` events (legacy enhanced event emissions removed).
+- Async notifications now standardize on canonical `team:started` and `team:complete` events.
 
 ### Changed
 - Reworked `skills.ts` to resolve skills through Pi core skill loading with explicit project-first precedence and support for project/user package and settings skill paths.
@@ -236,7 +235,7 @@
 ## [0.8.2] - 2026-02-11
 
 ### Added
-- Recursion depth guard (`PI_SUBAGENT_MAX_DEPTH`) to prevent runaway nested subagent spawning. Default max depth is 2 (main -> subagent -> sub-subagent). Deeper calls are blocked with guidance to the calling agent.
+- Recursion depth guard (`PI_TEAM_MAX_DEPTH`) to prevent runaway nested team spawning. Default max depth is 2 (main -> team -> sub-team). Deeper calls are blocked with guidance to the calling agent.
 
 ## [0.8.1] - 2026-02-10
 
@@ -246,7 +245,7 @@
 ## [0.8.0] - 2026-02-09
 
 ### Added
-- **Management mode for `subagent` tool** via `action` field — the LLM can now discover, create, modify, and delete agent/chain definitions at runtime without manual file editing or restarts. Five actions:
+- **Management mode for `team` tool** via `action` field — the LLM can now discover, create, modify, and delete agent/chain definitions at runtime without manual file editing or restarts. Five actions:
   - `list` — discover agents and chains with scope + description
   - `get` — full detail for agent or chain, including path and system prompt/steps
   - `create` — create agent (`.md`) or chain (`.chain.md`) definitions from `config`; immediately usable
@@ -287,7 +286,7 @@
   - Parallel builder: add same agent multiple times, set per-slot task overrides, shared task input
   - Progressive footer: 0 selected (default hints), 1 selected (`[ctrl+r] run [ctrl+p] parallel`), 2+ selected (`[ctrl+r] chain [ctrl+p] parallel`)
   - Selection count indicator in footer
-- **Slash commands with per-step tasks** — `/run`, `/chain`, and `/parallel` execute subagents with full live progress rendering and tab-completion. Results are sent to the conversation for the LLM to discuss.
+- **Slash commands with per-step tasks** — `/run`, `/chain`, and `/parallel` execute teams with full live progress rendering and tab-completion. Results are sent to the conversation for the LLM to discuss.
   - Per-step tasks with quotes: `/chain scout "scan code" -> planner "analyze auth"`
   - Per-step tasks for parallel: `/parallel scanner "find bugs" -> reviewer "check style"`
   - `--` delimiter also supported: `/chain scout -- scan code -> planner -- analyze auth`
@@ -313,7 +312,7 @@
 - **Chain first-step validation in per-step mode** — `/chain scout -> planner "task"` now correctly errors instead of silently assigning planner's task to scout. The first step must have its own task when using `->` syntax.
 - **Thinking level ignored in async mode** — `async-execution.ts` now applies thinking suffix to the model string before serializing to the runner, matching sync behavior
 - **Step-level model override ignored in async mode** — `executeAsyncChain` now uses `step.model ?? agent.model` as the base for thinking suffix, matching the sync path in `chain-execution.ts`
-- **mcpDirectTools not set in async mode** — `subagent-runner.ts` now sets `MCP_DIRECT_TOOLS` env var per step, matching the sync path in `execution.ts`
+- **mcpDirectTools not set in async mode** — `team-runner.ts` now sets `MCP_DIRECT_TOOLS` env var per step, matching the sync path in `execution.ts`
 - **`{task}` double-corruption in saved chain launches** — stopped pre-replacing `{task}` in the overlay launch path; raw user task passed as top-level param to `executeChain()`, which uses `params.task` for `originalTask`
 - **Agent serializer `skill` normalization** — `normalizedField` now maps `"skill"` to `"skills"` on the write path
 - **Clarify toggle determinism** — all four ManagerResult paths (single, chain, saved chain, parallel) now use deterministic JSON with `clarify: !result.skipClarify`, eliminating silent breakage from natural language variants
@@ -327,13 +326,13 @@
 ## [0.6.0] - 2026-02-02
 
 ### Added
-- **MCP direct tools for subagents** - Agents can request specific MCP tools as first-class tools via `mcp:` prefix in frontmatter: `tools: read, bash, mcp:chrome-devtools` or `tools: read, bash, mcp:github/search_repositories`. Requires pi-mcp-adapter.
-- **`MCP_DIRECT_TOOLS` env var** - Subagent processes receive their direct tool config via environment variable. Agents without `mcp:` items get a `__none__` sentinel to prevent config leaking from the parent process.
+- **MCP direct tools for teams** - Agents can request specific MCP tools as first-class tools via `mcp:` prefix in frontmatter: `tools: read, bash, mcp:chrome-devtools` or `tools: read, bash, mcp:github/search_repositories`. Requires pi-mcp-adapter.
+- **`MCP_DIRECT_TOOLS` env var** - Team processes receive their direct tool config via environment variable. Agents without `mcp:` items get a `__none__` sentinel to prevent config leaking from the parent process.
 
 ## [0.5.3] - 2026-02-01
 
 ### Fixed
-- Adapt execute signatures to pi v0.51.0: reorder signal, onUpdate, ctx parameters for subagent tool; add missing parameters to subagent_status tool
+- Adapt execute signatures to pi v0.51.0: reorder signal, onUpdate, ctx parameters for team tool; add missing parameters to team_status tool
 
 ## [0.5.2] - 2026-01-28
 
@@ -505,8 +504,8 @@
 ## [0.2.0] - 2026-01-24
 
 ### Changed
-- **Rebranded to `pi-subagents`** (was `pi-async-subagents`)
-- Now installable via `npx pi-subagents`
+- **Rebranded to `pi-teams`** (was `pi-async-teams`)
+- Now installable via `npx pi-teams`
 
 ### Added
 - Chain TUI now supports editing output paths, reads lists, and toggling progress per step
@@ -537,7 +536,7 @@
 - Chain completion now returns summary blurb with progress.md and artifacts paths instead of raw output
 
 ### Added
-- Live progress display for sync subagents (single and chain modes)
+- Live progress display for sync teams (single and chain modes)
 - Shows current tool, recent output lines, token count, and duration during execution
 - Ctrl+O hint during sync execution to expand full streaming view
 - Throttled updates (150ms) for smoother progress display
@@ -548,13 +547,13 @@
 - Progress data now correctly linked to results during execution (was showing "ok" instead of "...")
 
 ### Added
-- Extension API support (registerTool) with `subagent` tool name
+- Extension API support (registerTool) with `team` tool name
 - Session logs (JSONL + HTML export) and optional share links via GitHub Gist
 - `share` and `sessionDir` parameters for session retention control
-- Async events: `subagent:started`/`subagent:complete` (legacy events still emitted)
+- Async events: `team:started`/`team:complete`
 - Share info surfaced in TUI and async notifications
-- Async observability folder with `status.json`, `events.jsonl`, and `subagent-log-*.md`
-- `subagent_status` tool for inspecting async run state
+- Async observability folder with `status.json`, `events.jsonl`, and `team-log-*.md`
+- `team_status` tool for inspecting async run state
 - Async TUI widget for background runs
 
 ### Changed
@@ -568,7 +567,7 @@
 
 ## [0.1.0] - 2026-01-03
 
-Initial release forked from async-subagent example.
+Initial release forked from async-team example.
 
 ### Added
 - Output truncation with configurable byte/line limits

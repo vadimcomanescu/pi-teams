@@ -166,8 +166,8 @@ export function renderList(
 	const agentCount = agents.filter((a) => a.kind === "agent").length;
 	const chainCount = agents.filter((a) => a.kind === "chain").length;
 	const headerText = chainCount
-		? ` Subagents [${agentCount} agents  ${chainCount} chains] `
-		: ` Subagents [${agentCount}] `;
+		? ` Teams [${agentCount} agents  ${chainCount} chains] `
+		: ` Teams [${agentCount}] `;
 	lines.push(renderHeader(headerText, width, theme));
 	lines.push(row("", width, theme));
 

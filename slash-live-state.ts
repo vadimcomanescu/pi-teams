@@ -1,7 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
-import type { SubagentParamsLike } from "./subagent-executor.js";
-import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.js";
+import type { TeamParamsLike } from "./team-executor.js";
+import type { SlashTeamResponse, SlashTeamUpdate } from "./slash-bridge.js";
 import { type Details, type SingleResult, type Usage, SLASH_RESULT_TYPE } from "./types.js";
 
 export interface SlashMessageDetails {
@@ -73,7 +73,7 @@ function createPlaceholderResult(
 	};
 }
 
-function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
+function buildParallelInitialResult(params: TeamParamsLike): AgentToolResult<Details> {
 	const tasks = params.tasks ?? [];
 	return {
 		content: [{ type: "text", text: tasks.map((task) => `${task.agent}: ${task.task}`).join("\n\n") }],
@@ -124,7 +124,7 @@ function flattenChainResults(chain: ChainStepLike[], fallbackTask: string | unde
 	return results;
 }
 
-function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
+function buildChainInitialResult(params: TeamParamsLike): AgentToolResult<Details> {
 	const chain = (params.chain ?? []) as ChainStepLike[];
 	const results = flattenChainResults(chain, params.task);
 	return {
@@ -154,8 +154,8 @@ function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<De
 	};
 }
 
-function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const agent = params.agent ?? "subagent";
+function buildSingleInitialResult(params: TeamParamsLike): AgentToolResult<Details> {
+	const agent = params.agent ?? "team";
 	const task = params.task ?? "";
 	return {
 		content: [{ type: "text", text: task }],
@@ -177,7 +177,7 @@ function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<D
 	};
 }
 
-export function buildSlashInitialResult(requestId: string, params: SubagentParamsLike): SlashMessageDetails {
+export function buildSlashInitialResult(requestId: string, params: TeamParamsLike): SlashMessageDetails {
 	const result = (params.tasks?.length ?? 0) > 0
 		? buildParallelInitialResult(params)
 		: (params.chain?.length ?? 0) > 0
@@ -200,7 +200,7 @@ function cloneResultsWithProgress(
 	});
 }
 
-export function applySlashUpdate(requestId: string, update: SlashSubagentUpdate): void {
+export function applySlashUpdate(requestId: string, update: SlashTeamUpdate): void {
 	const snapshot = liveSnapshots.get(requestId);
 	if (!snapshot) return;
 	const progress = update.progress;
@@ -221,7 +221,7 @@ export function applySlashUpdate(requestId: string, update: SlashSubagentUpdate)
 	});
 }
 
-export function finalizeSlashResult(response: SlashSubagentResponse): SlashMessageDetails {
+export function finalizeSlashResult(response: SlashTeamResponse): SlashMessageDetails {
 	const snapshot = {
 		result: response.result,
 		version: nextVersion(),
@@ -234,7 +234,7 @@ export function finalizeSlashResult(response: SlashSubagentResponse): SlashMessa
 	};
 }
 
-export function failSlashResult(requestId: string, params: SubagentParamsLike, message: string): SlashMessageDetails {
+export function failSlashResult(requestId: string, params: TeamParamsLike, message: string): SlashMessageDetails {
 	const initial = buildSlashInitialResult(requestId, params).result;
 	const failedResults = initial.details.results.map((result) => ({
 		...result,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-interface SubagentParamsSchema {
+interface TeamParamsSchema {
 	properties?: {
 		context?: {
 			type?: string;
@@ -11,18 +11,18 @@ interface SubagentParamsSchema {
 	};
 }
 
-let SubagentParams: SubagentParamsSchema | undefined;
+let TeamParams: TeamParamsSchema | undefined;
 let available = true;
 try {
-	({ SubagentParams } = await import("./schemas.ts") as { SubagentParams: SubagentParamsSchema });
+	({ TeamParams } = await import("./schemas.ts") as { TeamParams: TeamParamsSchema });
 } catch {
 	// Skip in environments that do not install typebox.
 	available = false;
 }
 
-describe("SubagentParams schema", { skip: !available ? "typebox not available" : undefined }, () => {
+describe("TeamParams schema", { skip: !available ? "typebox not available" : undefined }, () => {
 	it("includes context field for fresh/fork execution mode", () => {
-		const contextSchema = SubagentParams?.properties?.context;
+		const contextSchema = TeamParams?.properties?.context;
 		assert.ok(contextSchema, "context schema should exist");
 		assert.equal(contextSchema.type, "string");
 		assert.deepEqual(contextSchema.enum, ["fresh", "fork"]);

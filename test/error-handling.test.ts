@@ -1,7 +1,7 @@
 /**
  * Integration tests for error handling across execution modes.
  *
- * Tests: agent crashes, stderr capture, detectSubagentError override,
+ * Tests: agent crashes, stderr capture, detectTeamError override,
  * signal/abort handling, and error propagation in chains.
  *
  * Requires pi packages for execution tests. Skips gracefully if unavailable.
@@ -31,21 +31,21 @@ const piAvailable = !!(execution && utils);
 const chainAvailable = !!chainMod;
 
 const runSync = execution?.runSync;
-const detectSubagentError = utils?.detectSubagentError;
+const detectTeamError = utils?.detectTeamError;
 const executeChain = chainMod?.executeChain;
 
 // ---------------------------------------------------------------------------
-// detectSubagentError
+// detectTeamError
 // ---------------------------------------------------------------------------
 
-describe("detectSubagentError", { skip: !detectSubagentError ? "utils not importable" : undefined }, () => {
+describe("detectTeamError", { skip: !detectTeamError ? "utils not importable" : undefined }, () => {
 	it("returns no error for successful messages", () => {
 		const messages = [
 			{ role: "assistant", content: [{ type: "text", text: "Let me check..." }] },
 			{ role: "toolResult", toolName: "bash", isError: false, content: [{ type: "text", text: "OK" }] },
 			{ role: "assistant", content: [{ type: "text", text: "All good!" }] },
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, false);
 	});
 
@@ -59,7 +59,7 @@ describe("detectSubagentError", { skip: !detectSubagentError ? "utils not import
 				content: [{ type: "text", text: "command not found" }],
 			},
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true);
 		assert.equal(result.errorType, "bash");
 	});
@@ -74,7 +74,7 @@ describe("detectSubagentError", { skip: !detectSubagentError ? "utils not import
 				content: [{ type: "text", text: "Error: process exited with code 127" }],
 			},
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true);
 		assert.equal(result.exitCode, 127);
 	});
@@ -87,7 +87,7 @@ describe("detectSubagentError", { skip: !detectSubagentError ? "utils not import
 			{ role: "toolResult", toolName: "bash", isError: false, content: [{ type: "text", text: "OK" }] },
 			{ role: "assistant", content: [{ type: "text", text: "Fixed!" }] },
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, false);
 	});
 
@@ -101,7 +101,7 @@ describe("detectSubagentError", { skip: !detectSubagentError ? "utils not import
 				content: [{ type: "text", text: "Permission denied" }],
 			},
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true);
 		assert.equal(result.errorType, "write");
 	});
@@ -143,7 +143,7 @@ describe("runSync error handling", { skip: !piAvailable ? "pi packages not avail
 		assert.ok(result.error?.includes("out of memory"));
 	});
 
-	it("detectSubagentError overrides exit 0 on hidden failure", async () => {
+	it("detectTeamError overrides exit 0 on hidden failure", async () => {
 		mockPi.onCall({
 			jsonl: [
 				events.toolStart("bash", { command: "deploy" }),

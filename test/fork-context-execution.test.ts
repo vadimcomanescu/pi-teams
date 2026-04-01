@@ -4,7 +4,7 @@ import type { MockPi } from "./helpers.ts";
 import { createMockPi, createTempDir, removeTempDir, tryImport } from "./helpers.ts";
 
 interface ExecutorModule {
-	createSubagentExecutor?: (...args: unknown[]) => {
+	createTeamExecutor?: (...args: unknown[]) => {
 		execute: (
 			id: string,
 			params: Record<string, unknown>,
@@ -15,9 +15,9 @@ interface ExecutorModule {
 	};
 }
 
-const executorMod = await tryImport<ExecutorModule>("./subagent-executor.ts");
+const executorMod = await tryImport<ExecutorModule>("./team-executor.ts");
 const available = !!executorMod;
-const createSubagentExecutor = executorMod?.createSubagentExecutor;
+const createTeamExecutor = executorMod?.createTeamExecutor;
 
 interface SessionStubOptions {
 	sessionFile?: string;
@@ -39,7 +39,7 @@ function makeSessionManagerRecorder(options: SessionStubOptions = {}) {
 		createBranchedSession: (leafId: string) => {
 			calls.push(leafId);
 			counter++;
-			return `/tmp/subagent-fork-${counter}.jsonl`;
+			return `/tmp/team-fork-${counter}.jsonl`;
 		},
 	};
 	return { manager, calls };
@@ -63,7 +63,7 @@ function makeState(cwd: string) {
 	};
 }
 
-describe("fork context execution wiring", { skip: !available ? "subagent executor not importable" : undefined }, () => {
+describe("fork context execution wiring", { skip: !available ? "team executor not importable" : undefined }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
 
@@ -77,7 +77,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 	});
 
 	beforeEach(() => {
-		tempDir = createTempDir("pi-subagent-fork-test-");
+		tempDir = createTempDir("pi-team-fork-test-");
 		mockPi.reset();
 		mockPi.onCall({ output: "ok" });
 	});
@@ -87,13 +87,13 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 	});
 
 	function makeExecutor() {
-		return createSubagentExecutor({
+		return createTeamExecutor({
 			pi: { events: { emit: () => {} } },
 			state: makeState(tempDir),
 			config: {},
 			asyncByDefault: false,
 			tempArtifactsDir: tempDir,
-			getSubagentSessionRoot: () => tempDir,
+			getTeamSessionRoot: () => tempDir,
 			expandTilde: (p: string) => p,
 			discoverAgents: () => ({
 				agents: [
@@ -165,7 +165,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		);
 
 		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /Failed to create forked subagent session/);
+		assert.match(result.content[0]?.text ?? "", /Failed to create forked team session/);
 		assert.match(result.content[0]?.text ?? "", /branch write failed/);
 	});
 

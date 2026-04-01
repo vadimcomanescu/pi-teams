@@ -70,11 +70,11 @@ describe("buildPiArgs session wiring", () => {
 			baseArgs: ["-p"],
 			task: "hello",
 			sessionEnabled: true,
-			sessionDir: "/tmp/subagent-sessions",
+			sessionDir: "/tmp/team-sessions",
 		});
 
 		assert.ok(args.includes("--session-dir"));
-		assert.ok(args.includes("/tmp/subagent-sessions"));
+		assert.ok(args.includes("/tmp/team-sessions"));
 		assert.ok(!args.includes("--session"));
 	});
 });

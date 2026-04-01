@@ -7,7 +7,8 @@ export interface NotificationData {
 	id: string | null;
 	agent: string | null;
 	name?: string;
-	success: boolean;
+	success?: boolean;
+	status?: "completed" | "failed" | "stopped" | "timed_out";
 	summary: string;
 	exitCode: number;
 	timestamp: number;
@@ -23,11 +24,16 @@ export interface NotificationData {
 	};
 }
 
+function resolveStatus(result: NotificationData): "completed" | "failed" | "stopped" | "timed_out" {
+	if (result.status) return result.status;
+	return result.success === false ? "failed" : "completed";
+}
+
 /**
  * Coordinator XML format for structured LLM consumption.
  */
 export function buildCoordinatorXml(result: NotificationData): string {
-	const status = result.success ? "completed" : "failed";
+	const status = resolveStatus(result);
 	const name = result.name ?? result.agent ?? "unknown";
 
 	const parts: string[] = ["<task-notification>"];
@@ -58,8 +64,8 @@ export function buildCoordinatorXml(result: NotificationData): string {
  * Default markdown format for human-readable notifications.
  */
 export function buildMarkdownNotification(result: NotificationData): string {
-	const agent = result.agent ?? "unknown";
-	const status = result.success ? "completed" : "failed";
+	const agent = result.agent ?? result.name ?? "unknown";
+	const status = resolveStatus(result);
 
 	const taskInfo =
 		result.taskIndex !== undefined && result.totalTasks !== undefined

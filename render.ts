@@ -1,5 +1,5 @@
 /**
- * Rendering functions for subagent results
+ * Rendering functions for team results
  */
 
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -137,7 +137,7 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 	const theme = ctx.ui.theme;
 	const w = getTermWidth();
 	const lines: string[] = [];
-	lines.push(theme.fg("accent", "Async subagents"));
+	lines.push(theme.fg("accent", "Async teams"));
 
 	for (const job of displayedJobs) {
 		const id = job.asyncId.slice(0, 6);
@@ -173,9 +173,9 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 }
 
 /**
- * Render a subagent result
+ * Render a team result
  */
-export function renderSubagentResult(
+export function renderTeamResult(
 	result: AgentToolResult<Details>,
 	_options: { expanded: boolean },
 	theme: Theme,

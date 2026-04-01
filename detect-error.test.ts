@@ -8,12 +8,12 @@ interface DetectErrorResult {
 	exitCode?: number;
 }
 
-type DetectSubagentError = (messages: unknown[]) => DetectErrorResult;
+type DetectTeamError = (messages: unknown[]) => DetectErrorResult;
 
-let detectSubagentError: DetectSubagentError | undefined;
+let detectTeamError: DetectTeamError | undefined;
 let available = true;
 try {
-	({ detectSubagentError } = await import("./utils.ts"));
+	({ detectTeamError } = await import("./utils.ts"));
 } catch {
 	// Skip in lean unit mode when runtime-only imports are unavailable.
 	available = false;
@@ -53,11 +53,11 @@ function assistantToolCall(toolName: string): Record<string, unknown> {
 	};
 }
 
-describe("detectSubagentError", { skip: !available ? "utils not importable" : undefined }, () => {
+describe("detectTeamError", { skip: !available ? "utils not importable" : undefined }, () => {
 	// ---- Basic detection (must still work) ----
 
 	it("returns no error for empty messages", () => {
-		assert.equal(detectSubagentError([]).hasError, false);
+		assert.equal(detectTeamError([]).hasError, false);
 	});
 
 	it("returns no error when all tool results succeed", () => {
@@ -66,7 +66,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("bash", "ls output"),
 			toolResult("read", "more contents"),
 		];
-		assert.equal(detectSubagentError(messages).hasError, false);
+		assert.equal(detectTeamError(messages).hasError, false);
 	});
 
 	it("detects isError tool result as failure (no assistant response)", () => {
@@ -74,7 +74,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("read", "file contents"),
 			toolResult("read", "EISDIR: illegal operation on a directory, read", true),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true);
 		assert.equal(result.errorType, "read");
 		assert.match(result.details!, /EISDIR/);
@@ -84,7 +84,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 		const messages = [
 			toolResult("bash", "ls: permission denied: /root/secret"),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true);
 		assert.equal(result.errorType, "bash");
 	});
@@ -93,7 +93,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 		const messages = [
 			toolResult("bash", "error: process exited with code 127"),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true);
 		assert.equal(result.exitCode, 127);
 	});
@@ -108,7 +108,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("bash", "directory listing via bash"),
 			assistantMsg("Here is my complete review..."),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, false,
 			"error before agent's final text response should be ignored");
 	});
@@ -124,7 +124,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("read", "EISDIR: illegal operation on a directory, read", true),
 			assistantMsg("## Complete Review\n\nHere are all my findings..."),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, false,
 			"agent produced substantive output after error — not a failure");
 	});
@@ -134,7 +134,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("bash", "ls: permission denied: /root/secret"),
 			assistantMsg("I couldn't access /root/secret, but I found the data elsewhere."),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, false,
 			"fatal pattern before agent's text response = recovered");
 	});
@@ -147,7 +147,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("bash", "rm -rf /important", false),
 			toolResult("bash", "error: process exited with code 1", false),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true);
 		assert.equal(result.exitCode, 1);
 	});
@@ -158,7 +158,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			assistantMsg("Let me try one more thing..."),
 			toolResult("write", "Permission denied", true),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true);
 		assert.equal(result.errorType, "write");
 	});
@@ -170,7 +170,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("read", "ok"),
 			toolResult("bash", "segmentation fault"),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true,
 			"no assistant response = no recovery evidence");
 	});
@@ -185,7 +185,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			assistantToolCall("bash"),
 			toolResult("bash", "command succeeded"),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true,
 			"tool-call assistant message without text is not a recovery");
 	});
@@ -195,7 +195,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("read", "EISDIR: illegal operation on a directory", true),
 			assistantMsg("   "),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, true,
 			"whitespace-only assistant message is not a recovery");
 	});
@@ -205,7 +205,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			assistantMsg("Hello, I'm ready to help."),
 			assistantMsg("Here's my analysis."),
 		];
-		assert.equal(detectSubagentError(messages).hasError, false);
+		assert.equal(detectTeamError(messages).hasError, false);
 	});
 
 	it("handles multiple errors with recovery between them", () => {
@@ -217,7 +217,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("read", "EISDIR: illegal operation on a directory", true),
 			assistantMsg("Got what I needed. Here's the full review."),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, false,
 			"all errors have recovery — agent completed successfully");
 	});
@@ -235,7 +235,7 @@ describe("detectSubagentError", { skip: !available ? "utils not importable" : un
 			toolResult("read", "EISDIR: illegal operation on a directory, read", true),
 			assistantMsg("## Implementation Review\n\n" + "x".repeat(13000)),
 		];
-		const result = detectSubagentError(messages);
+		const result = detectTeamError(messages);
 		assert.equal(result.hasError, false,
 			"complete review with trailing EISDIR must not be flagged as failure");
 	});

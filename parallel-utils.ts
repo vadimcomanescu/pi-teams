@@ -5,7 +5,7 @@
  */
 
 /** A single agent step in the runner config */
-export interface RunnerSubagentStep {
+export interface RunnerTeamStep {
 	agent: string;
 	task: string;
 	cwd?: string;
@@ -21,20 +21,20 @@ export interface RunnerSubagentStep {
 
 /** Parallel step group — multiple agents running concurrently */
 export interface ParallelStepGroup {
-	parallel: RunnerSubagentStep[];
+	parallel: RunnerTeamStep[];
 	concurrency?: number;
 	failFast?: boolean;
 }
 
-export type RunnerStep = RunnerSubagentStep | ParallelStepGroup;
+export type RunnerStep = RunnerTeamStep | ParallelStepGroup;
 
 export function isParallelGroup(step: RunnerStep): step is ParallelStepGroup {
 	return "parallel" in step && Array.isArray((step as ParallelStepGroup).parallel);
 }
 
-/** Flatten runner steps into individual SubagentSteps for status tracking */
-export function flattenSteps(steps: RunnerStep[]): RunnerSubagentStep[] {
-	const flat: RunnerSubagentStep[] = [];
+/** Flatten runner steps into individual TeamSteps for status tracking */
+export function flattenSteps(steps: RunnerStep[]): RunnerTeamStep[] {
+	const flat: RunnerTeamStep[] = [];
 	for (const step of steps) {
 		if (isParallelGroup(step)) {
 			for (const task of step.parallel) flat.push(task);
@@ -47,7 +47,7 @@ export function flattenSteps(steps: RunnerStep[]): RunnerSubagentStep[] {
 
 /** Run async tasks with bounded concurrency, preserving result order.
  *  `staggerMs` adds a small delay between each worker's start to avoid
- *  file-lock contention when multiple subagents read shared config. */
+ *  file-lock contention when multiple teams read shared config. */
 export async function mapConcurrent<T, R>(
 	items: T[],
 	limit: number,

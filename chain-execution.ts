@@ -1,5 +1,5 @@
 /**
- * Chain execution logic for subagent tool
+ * Chain execution logic for team tool
  */
 
 import * as fs from "node:fs";
@@ -92,7 +92,7 @@ export interface ChainExecutionResult {
 }
 
 /**
- * Execute a chain of subagent steps
+ * Execute a chain of team steps
  */
 export async function executeChain(params: ChainExecutionParams): Promise<ChainExecutionResult> {
 	const {

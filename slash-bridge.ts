@@ -1,28 +1,28 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { SubagentParamsLike } from "./subagent-executor.js";
+import type { TeamParamsLike } from "./team-executor.js";
 import {
-	SLASH_SUBAGENT_CANCEL_EVENT,
-	SLASH_SUBAGENT_REQUEST_EVENT,
-	SLASH_SUBAGENT_RESPONSE_EVENT,
-	SLASH_SUBAGENT_STARTED_EVENT,
-	SLASH_SUBAGENT_UPDATE_EVENT,
+	SLASH_TEAM_CANCEL_EVENT,
+	SLASH_TEAM_REQUEST_EVENT,
+	SLASH_TEAM_RESPONSE_EVENT,
+	SLASH_TEAM_STARTED_EVENT,
+	SLASH_TEAM_UPDATE_EVENT,
 	type Details,
 } from "./types.js";
 
-export interface SlashSubagentRequest {
+export interface SlashTeamRequest {
 	requestId: string;
-	params: SubagentParamsLike;
+	params: TeamParamsLike;
 }
 
-export interface SlashSubagentResponse {
+export interface SlashTeamResponse {
 	requestId: string;
 	result: AgentToolResult<Details>;
 	isError: boolean;
 	errorText?: string;
 }
 
-export interface SlashSubagentUpdate {
+export interface SlashTeamUpdate {
 	requestId: string;
 	progress?: Details["progress"];
 	currentTool?: string;
@@ -39,14 +39,14 @@ interface SlashBridgeOptions {
 	getContext: () => ExtensionContext | null;
 	execute: (
 		id: string,
-		params: SubagentParamsLike,
+		params: TeamParamsLike,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	) => Promise<AgentToolResult<Details>>;
 }
 
-export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
+export function registerSlashTeamBridge(options: SlashBridgeOptions): {
 	cancelAll: () => void;
 	dispose: () => void;
 } {
@@ -59,7 +59,7 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 		if (typeof unsubscribe === "function") subscriptions.push(unsubscribe);
 	};
 
-	subscribe(SLASH_SUBAGENT_CANCEL_EVENT, (data) => {
+	subscribe(SLASH_TEAM_CANCEL_EVENT, (data) => {
 		if (!data || typeof data !== "object") return;
 		const requestId = (data as { requestId?: unknown }).requestId;
 		if (typeof requestId !== "string") return;
@@ -71,24 +71,24 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 		pendingCancels.add(requestId);
 	});
 
-	subscribe(SLASH_SUBAGENT_REQUEST_EVENT, async (data) => {
+	subscribe(SLASH_TEAM_REQUEST_EVENT, async (data) => {
 		if (!data || typeof data !== "object") return;
-		const request = data as Partial<SlashSubagentRequest>;
+		const request = data as Partial<SlashTeamRequest>;
 		if (typeof request.requestId !== "string" || !request.params) return;
-		const { requestId, params } = request as SlashSubagentRequest;
+		const { requestId, params } = request as SlashTeamRequest;
 
 		const ctx = options.getContext();
 		if (!ctx) {
-			const response: SlashSubagentResponse = {
+			const response: SlashTeamResponse = {
 				requestId,
 				result: {
-					content: [{ type: "text", text: "No active extension context for slash subagent execution." }],
+					content: [{ type: "text", text: "No active extension context for slash team execution." }],
 					details: { mode: "single" as const, results: [] },
 				},
 				isError: true,
 				errorText: "No active extension context.",
 			};
-			options.events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, response);
+			options.events.emit(SLASH_TEAM_RESPONSE_EVENT, response);
 			return;
 		}
 
@@ -97,7 +97,7 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 
 		if (pendingCancels.delete(requestId)) {
 			controller.abort();
-			const response: SlashSubagentResponse = {
+			const response: SlashTeamResponse = {
 				requestId,
 				result: {
 					content: [{ type: "text", text: "Cancelled." }],
@@ -106,12 +106,12 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 				isError: true,
 				errorText: "Cancelled before start.",
 			};
-			options.events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, response);
+			options.events.emit(SLASH_TEAM_RESPONSE_EVENT, response);
 			controllers.delete(requestId);
 			return;
 		}
 
-		options.events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId });
+		options.events.emit(SLASH_TEAM_STARTED_EVENT, { requestId });
 
 		try {
 			const result = await options.execute(
@@ -121,18 +121,18 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 				(update) => {
 					const progress = update.details?.progress;
 					const first = progress?.[0];
-					const payload: SlashSubagentUpdate = {
+					const payload: SlashTeamUpdate = {
 						requestId,
 						progress,
 						currentTool: first?.currentTool,
 						toolCount: first?.toolCount,
 					};
-					options.events.emit(SLASH_SUBAGENT_UPDATE_EVENT, payload);
+					options.events.emit(SLASH_TEAM_UPDATE_EVENT, payload);
 				},
 				ctx,
 			);
 
-			const response: SlashSubagentResponse = {
+			const response: SlashTeamResponse = {
 				requestId,
 				result,
 				isError: (result as { isError?: boolean }).isError === true,
@@ -140,9 +140,9 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 					? result.content.find((c) => c.type === "text")?.text
 					: undefined,
 			};
-			options.events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, response);
+			options.events.emit(SLASH_TEAM_RESPONSE_EVENT, response);
 		} catch (error) {
-			const response: SlashSubagentResponse = {
+			const response: SlashTeamResponse = {
 				requestId,
 				result: {
 					content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
@@ -151,7 +151,7 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 				isError: true,
 				errorText: error instanceof Error ? error.message : String(error),
 			};
-			options.events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, response);
+			options.events.emit(SLASH_TEAM_RESPONSE_EVENT, response);
 		} finally {
 			controllers.delete(requestId);
 		}

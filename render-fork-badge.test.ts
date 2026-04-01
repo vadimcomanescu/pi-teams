@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-type RenderSubagentResult = (
+type RenderTeamResult = (
 	result: {
 		content: Array<{ type: "text"; text: string }>;
 		details?: {
@@ -17,11 +17,11 @@ type RenderSubagentResult = (
 	},
 ) => { render(width: number): string[] };
 
-let renderSubagentResult: RenderSubagentResult | undefined;
+let renderTeamResult: RenderTeamResult | undefined;
 let available = true;
 try {
-	({ renderSubagentResult } = await import("./render.ts") as {
-		renderSubagentResult?: RenderSubagentResult;
+	({ renderTeamResult } = await import("./render.ts") as {
+		renderTeamResult?: RenderTeamResult;
 	});
 } catch {
 	// Skip in plain unit mode where render.ts dependencies are unavailable.
@@ -33,9 +33,9 @@ const theme = {
 	bold: (text: string) => text,
 };
 
-describe("renderSubagentResult fork indicator", { skip: !available ? "render.ts not importable" : undefined }, () => {
+describe("renderTeamResult fork indicator", { skip: !available ? "render.ts not importable" : undefined }, () => {
 	it("shows [fork] when details are empty but context is fork", () => {
-		const widget = renderSubagentResult!({
+		const widget = renderTeamResult!({
 			content: [{ type: "text", text: "Async: reviewer [abc123]" }],
 			details: { mode: "single", context: "fork", results: [] },
 		}, { expanded: false }, theme);
@@ -45,7 +45,7 @@ describe("renderSubagentResult fork indicator", { skip: !available ? "render.ts 
 	});
 
 	it("shows [fork] on single-result header", () => {
-		const widget = renderSubagentResult!({
+		const widget = renderTeamResult!({
 			content: [{ type: "text", text: "done" }],
 			details: {
 				mode: "single",

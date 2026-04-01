@@ -9,6 +9,8 @@
 import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { MockPi } from "./helpers.ts";
 import {
 	createMockPi,
@@ -68,9 +70,12 @@ describe("coordinator system prompt", { skip: !available ? "modules not availabl
 		const prompt = getCoordinatorSystemPrompt();
 		assert.ok(prompt.includes("## Coordinator Mode"), "should have coordinator mode header");
 		assert.ok(prompt.includes("### Your Tools"), "should have tools section");
-		assert.ok(prompt.includes("subagent"), "should mention subagent tool");
+		assert.ok(prompt.includes("team_create"), "should mention team_create");
+		assert.ok(prompt.includes("spawn_teammate"), "should mention spawn_teammate");
+		assert.ok(prompt.includes("task_create"), "should mention task_create");
 		assert.ok(prompt.includes("send_message"), "should mention send_message tool");
 		assert.ok(prompt.includes("task_stop"), "should mention task_stop tool");
+		assert.ok(prompt.includes("running-only"), "should document running-only send_message");
 		assert.ok(prompt.includes("<task-notification>"), "should describe notification format");
 		assert.ok(prompt.includes("### Task Workflow"), "should have workflow section");
 		assert.ok(prompt.includes("### Concurrency"), "should have concurrency section");
@@ -90,6 +95,26 @@ describe("coordinator system prompt", { skip: !available ? "modules not availabl
 	it("includes max concurrent workers from settings", () => {
 		const prompt = getCoordinatorSystemPrompt();
 		assert.ok(prompt.includes("**8**"), "should include default max workers");
+	});
+
+	it("stays aligned with the builtin coordinator agent and team-first contract", () => {
+		const prompt = getCoordinatorSystemPrompt();
+		const coordinatorAgent = fs.readFileSync(path.resolve("agents/coordinator.md"), "utf-8");
+		for (const required of [
+			"team_create",
+			"spawn_teammate",
+			"task_create",
+			"task_list",
+			"check_teammate",
+			"team_shutdown",
+		]) {
+			assert.ok(prompt.includes(required), `prompt should include ${required}`);
+			assert.ok(coordinatorAgent.includes(required), `builtin coordinator should include ${required}`);
+		}
+		assert.ok(prompt.includes("running-only"), "prompt should document running-only send_message");
+		assert.ok(coordinatorAgent.includes("running teammates"), "builtin coordinator should document running-only send_message");
+		assert.ok(!prompt.includes("--coordinator"), "prompt should not require a coordinator flag");
+		assert.ok(!coordinatorAgent.includes("--coordinator"), "builtin coordinator should not require a coordinator flag");
 	});
 });
 

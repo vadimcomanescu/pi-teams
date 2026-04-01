@@ -2,8 +2,8 @@
  * Integration tests for Agent Registry wiring.
  *
  * Verifies that:
- * - subagent:started events populate the registry
- * - subagent:complete events update registry status
+ * - team:started events populate the registry
+ * - team:complete events update registry status
  * - The registry is accessible and correctly wired
  *
  * Uses createTestSession from @marcfargas/pi-test-harness to load
@@ -40,7 +40,7 @@ describe("AgentRegistry event integration", { skip: !available ? "modules not av
 		registry = new AgentRegistry();
 	});
 
-	it("subagent:started event shape populates registry", () => {
+	it("team:started event shape populates registry", () => {
 		// Simulate the event data shape emitted by async-execution.ts
 		const startedData = {
 			id: "run-abc123",
@@ -71,7 +71,7 @@ describe("AgentRegistry event integration", { skip: !available ? "modules not av
 		assert.equal(registry.resolve("run-abc123")?.name, "auth-investigator");
 	});
 
-	it("subagent:complete event shape updates registry", () => {
+	it("team:complete event shape updates registry", () => {
 		registry.register({
 			id: "run-xyz",
 			name: "builder",

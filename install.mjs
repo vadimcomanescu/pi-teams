@@ -4,7 +4,7 @@
  * pi-teams installer
  * 
  * Usage:
- *   npx pi-teams          # Install to ~/.pi/agent/extensions/subagent
+ *   npx pi-teams          # Install to ~/.pi/agent/extensions/pi-teams
  *   npx pi-teams --remove # Remove the extension
  */
 
@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const EXTENSION_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "subagent");
+const EXTENSION_DIR = path.join(os.homedir(), ".pi", "agent", "extensions", "pi-teams");
 const REPO_URL = "https://github.com/vadimcomanescu/pi-teams.git";
 
 const args = process.argv.slice(2);
@@ -22,13 +22,14 @@ const isHelp = args.includes("--help") || args.includes("-h");
 
 if (isHelp) {
 	console.log(`
-pi-teams - Pi extension for delegating tasks to subagents with coordinator mode
+pi-teams - Pi extension for managing teams of agents, shared tasks, and raw worker delegation
 
 Usage:
   npx pi-teams          Install the extension
   npx pi-teams --remove Remove the extension
   npx pi-teams --help   Show this help
 
+Lead sessions use the team coordinator prompt by default.
 Installation directory: ${EXTENSION_DIR}
 `);
 	process.exit(0);
@@ -38,9 +39,9 @@ if (isRemove) {
 	if (fs.existsSync(EXTENSION_DIR)) {
 		console.log(`Removing ${EXTENSION_DIR}...`);
 		fs.rmSync(EXTENSION_DIR, { recursive: true });
-		console.log("✓ pi-subagents removed");
+		console.log("✓ pi-teams removed");
 	} else {
-		console.log("pi-subagents is not installed");
+		console.log("pi-teams is not installed");
 	}
 	process.exit(0);
 }
@@ -85,11 +86,23 @@ if (fs.existsSync(EXTENSION_DIR)) {
 }
 
 console.log(`
-The extension is now available in pi. Tools added:
-  • subagent        - Delegate tasks to agents (single, chain, parallel)
-  • subagent_status - Check async run status
-  • send_message    - Send follow-up messages to running workers (coordinator mode)
-  • task_stop       - Stop running workers (coordinator mode)
+The extension is now available in pi.
+
+Primary lead tools:
+  • team_create     - Create the active team for this lead session
+  • spawn_teammate  - Launch a named teammate inside that team
+  • check_teammate  - Inspect teammate status and last summary
+  • team_shutdown   - Stop the active team
+  • task_create     - Add a shared team task
+  • task_list       - List shared team tasks
+  • task_read       - Read one shared team task
+  • task_update     - Update task status or owner
+
+Advanced worker tools:
+  • team            - Delegate raw worker execution (single, chain, parallel)
+  • team_status     - Check async raw worker run status
+  • send_message    - Follow up with a running teammate or worker
+  • task_stop       - Stop a running teammate or worker
 
 Documentation: ${EXTENSION_DIR}/README.md
 `);

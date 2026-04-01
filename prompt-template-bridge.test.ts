@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-	PROMPT_TEMPLATE_SUBAGENT_CANCEL_EVENT,
-	PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT,
-	PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT,
-	PROMPT_TEMPLATE_SUBAGENT_STARTED_EVENT,
-	PROMPT_TEMPLATE_SUBAGENT_UPDATE_EVENT,
+	PROMPT_TEMPLATE_TEAM_CANCEL_EVENT,
+	PROMPT_TEMPLATE_TEAM_REQUEST_EVENT,
+	PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT,
+	PROMPT_TEMPLATE_TEAM_STARTED_EVENT,
+	PROMPT_TEMPLATE_TEAM_UPDATE_EVENT,
 	registerPromptTemplateDelegationBridge,
 	type PromptTemplateBridgeEvents,
 } from "./prompt-template-bridge.ts";
@@ -72,11 +72,11 @@ describe("prompt-template delegation bridge", () => {
 			},
 		});
 
-		const startedPromise = once(events, PROMPT_TEMPLATE_SUBAGENT_STARTED_EVENT);
-		const updatePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_UPDATE_EVENT);
-		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
+		const startedPromise = once(events, PROMPT_TEMPLATE_TEAM_STARTED_EVENT);
+		const updatePromise = once(events, PROMPT_TEMPLATE_TEAM_UPDATE_EVENT);
+		const responsePromise = once(events, PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT);
 
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+		events.emit(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, {
 			requestId: "r1",
 			agent: "worker",
 			task: "do work",
@@ -134,9 +134,9 @@ describe("prompt-template delegation bridge", () => {
 			},
 		});
 
-		const updatePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_UPDATE_EVENT);
-		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+		const updatePromise = once(events, PROMPT_TEMPLATE_TEAM_UPDATE_EVENT);
+		const responsePromise = once(events, PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT);
+		events.emit(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, {
 			requestId: "r-malformed-output",
 			agent: "worker",
 			task: "do work",
@@ -167,8 +167,8 @@ describe("prompt-template delegation bridge", () => {
 			execute: async () => ({ details: { results: [{ messages: [] }] } }),
 		});
 
-		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+		const responsePromise = once(events, PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT);
+		events.emit(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, {
 			requestId: "r2",
 			agent: "worker",
 			task: "do work",
@@ -196,8 +196,8 @@ describe("prompt-template delegation bridge", () => {
 			},
 		});
 
-		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+		const responsePromise = once(events, PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT);
+		events.emit(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, {
 			requestId: "r3",
 			agent: "worker",
 			task: "do work",
@@ -225,10 +225,10 @@ describe("prompt-template delegation bridge", () => {
 			},
 		});
 
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_CANCEL_EVENT, { requestId: "r4" });
-		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
+		events.emit(PROMPT_TEMPLATE_TEAM_CANCEL_EVENT, { requestId: "r4" });
+		const responsePromise = once(events, PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT);
 
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+		events.emit(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, {
 			requestId: "r4",
 			agent: "worker",
 			task: "do work",
@@ -256,10 +256,10 @@ describe("prompt-template delegation bridge", () => {
 				}),
 		});
 
-		const startedPromise = once(events, PROMPT_TEMPLATE_SUBAGENT_STARTED_EVENT);
-		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
+		const startedPromise = once(events, PROMPT_TEMPLATE_TEAM_STARTED_EVENT);
+		const responsePromise = once(events, PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT);
 
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+		events.emit(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, {
 			requestId: "r5",
 			agent: "worker",
 			task: "do work",
@@ -269,7 +269,7 @@ describe("prompt-template delegation bridge", () => {
 		});
 
 		await startedPromise;
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_CANCEL_EVENT, { requestId: "r5" });
+		events.emit(PROMPT_TEMPLATE_TEAM_CANCEL_EVENT, { requestId: "r5" });
 
 		const response = await responsePromise as { isError: boolean; errorText?: string };
 		assert.equal(response.isError, true);
@@ -297,8 +297,8 @@ describe("prompt-template delegation bridge", () => {
 			},
 		});
 
-		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+		const responsePromise = once(events, PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT);
+		events.emit(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, {
 			requestId: "r6",
 			tasks: [
 				{ agent: "worker-a", task: "A", model: "openai/gpt-5" },
@@ -339,8 +339,8 @@ describe("prompt-template delegation bridge", () => {
 			}),
 		});
 
-		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
-		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+		const responsePromise = once(events, PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT);
+		events.emit(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, {
 			requestId: "r7",
 			tasks: [
 				{ agent: "worker-a", task: "A" },

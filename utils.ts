@@ -1,5 +1,5 @@
 /**
- * General utility functions for the subagent extension
+ * General utility functions for the team extension
  */
 
 import * as fs from "node:fs";
@@ -141,7 +141,7 @@ export function findLatestSessionFile(sessionDir: string): string | null {
  * Write a prompt to a temporary file
  */
 export function writePrompt(agent: string, prompt: string): { dir: string; path: string } {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-team-"));
 	const p = path.join(dir, `${agent.replace(/[^\w.-]/g, "_")}.md`);
 	fs.writeFileSync(p, prompt, { mode: 0o600 });
 	return { dir, path: p };
@@ -183,9 +183,9 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
 }
 
 /**
- * Detect errors in subagent execution from messages (only errors with no subsequent success)
+ * Detect errors in team execution from messages (only errors with no subsequent success)
  */
-export function detectSubagentError(messages: Message[]): ErrorInfo {
+export function detectTeamError(messages: Message[]): ErrorInfo {
 	// Step 1: Find the last assistant message with text content.
 	// If the agent produced a text response after encountering errors,
 	// it had a chance to recover — only errors AFTER this point matter.

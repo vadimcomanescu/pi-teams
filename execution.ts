@@ -1,5 +1,5 @@
 /**
- * Core execution logic for running subagents
+ * Core execution logic for running teams
  */
 
 import { spawn } from "node:child_process";
@@ -18,12 +18,12 @@ import {
 	type SingleResult,
 	DEFAULT_MAX_OUTPUT,
 	truncateOutput,
-	getSubagentDepthEnv,
+	getTeamDepthEnv,
 } from "./types.js";
 import {
 	getFinalOutput,
 	findLatestSessionFile,
-	detectSubagentError,
+	detectTeamError,
 	extractToolArgsPreview,
 	extractTextFromContent,
 } from "./utils.js";
@@ -33,7 +33,7 @@ import { createJsonlWriter } from "./jsonl-writer.js";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "./pi-args.js";
 
 /**
- * Run a subagent synchronously (blocking until complete)
+ * Run a team synchronously (blocking until complete)
  */
 export async function runSync(
 	runtimeCwd: string,
@@ -131,7 +131,7 @@ export async function runSync(
 		}
 	}
 
-	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv() };
+	const spawnEnv = { ...process.env, ...sharedEnv, ...getTeamDepthEnv(), ...(options.extraEnv ?? {}) };
 
 	let closeJsonlWriter: (() => Promise<void>) | undefined;
 	let rpcProc: import("node:child_process").ChildProcess | undefined;
@@ -295,7 +295,7 @@ export async function runSync(
 	result.exitCode = exitCode;
 
 	if (exitCode === 0 && !result.error) {
-		const errInfo = detectSubagentError(result.messages);
+		const errInfo = detectTeamError(result.messages);
 		if (errInfo.hasError) {
 			result.exitCode = errInfo.exitCode ?? 1;
 			result.error = errInfo.details

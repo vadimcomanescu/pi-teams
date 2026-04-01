@@ -2,12 +2,12 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import * as path from "node:path";
 import { renderWidget } from "./render.js";
 import {
-	type SubagentState,
+	type TeamState,
 	POLL_INTERVAL_MS,
 } from "./types.js";
 import { readStatus } from "./utils.js";
 
-export function createAsyncJobTracker(state: SubagentState, asyncDirRoot: string): {
+export function createAsyncJobTracker(state: TeamState, asyncDirRoot: string): {
 	ensurePoller: () => void;
 	handleStarted: (data: unknown) => void;
 	handleComplete: (data: unknown) => void;

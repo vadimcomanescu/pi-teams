@@ -1,5 +1,5 @@
 /**
- * Subagent completion notifications (extension)
+ * Team completion notifications (extension)
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -8,8 +8,8 @@ import { isCoordinatorMode } from "./coordinator.js";
 import { buildCoordinatorXml, buildMarkdownNotification } from "./notify-format.js";
 import type { NotificationData } from "./notify-format.js";
 
-export default function registerSubagentNotify(pi: ExtensionAPI): void {
-	const seen = getGlobalSeenMap("__pi_subagents_notify_seen__");
+export default function registerTeamNotify(pi: ExtensionAPI): void {
+	const seen = getGlobalSeenMap("__pi_teams_notify_seen__");
 	const ttlMs = 10 * 60 * 1000;
 
 	const handleComplete = (data: unknown) => {
@@ -29,10 +29,10 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 		}
 
 		pi.sendMessage(
-			{ customType: "subagent-notify", content, display: true },
+			{ customType: "team-notify", content, display: true },
 			sendOptions,
 		);
 	};
 
-	pi.events.on("subagent:complete", handleComplete);
+	pi.events.on("team:complete", handleComplete);
 }

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-const SLASH_RESULT_TYPE = "subagent-slash-result";
-const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
-const SLASH_SUBAGENT_STARTED_EVENT = "subagent:slash:started";
-const SLASH_SUBAGENT_RESPONSE_EVENT = "subagent:slash:response";
+const SLASH_RESULT_TYPE = "team-slash-result";
+const SLASH_TEAM_REQUEST_EVENT = "team:slash:request";
+const SLASH_TEAM_STARTED_EVENT = "team:slash:started";
+const SLASH_TEAM_RESPONSE_EVENT = "team:slash:response";
 
 interface EventBus {
 	on(event: string, handler: (data: unknown) => void): () => void;
@@ -34,13 +34,16 @@ interface RegisterSlashCommandsModule {
 			watcherRestartTimer: ReturnType<typeof setTimeout> | null;
 			resultFileCoalescer: { schedule(file: string, delayMs?: number): boolean; clear(): void };
 		},
+		deps?: unknown,
 	) => void;
 }
 
 let registerSlashCommands: RegisterSlashCommandsModule["registerSlashCommands"];
+let setCoordinatorMode: ((active: boolean) => void) | undefined;
 let available = true;
 try {
 	({ registerSlashCommands } = await import("./slash-commands.ts") as RegisterSlashCommandsModule);
+	({ setCoordinatorMode } = await import("./coordinator.ts") as { setCoordinatorMode?: (active: boolean) => void });
 } catch {
 	available = false;
 }
@@ -102,10 +105,10 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
 		const events = createEventBus();
-		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+		events.on(SLASH_TEAM_REQUEST_EVENT, (data) => {
 			const requestId = (data as { requestId: string }).requestId;
-			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId });
-			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+			events.emit(SLASH_TEAM_STARTED_EVENT, { requestId });
+			events.emit(SLASH_TEAM_RESPONSE_EVENT, {
 				requestId,
 				result: {
 					content: [{ type: "text", text: "Scout finished" }],
@@ -142,17 +145,17 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
 		const events = createEventBus();
-		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+		events.on(SLASH_TEAM_REQUEST_EVENT, (data) => {
 			const requestId = (data as { requestId: string }).requestId;
-			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId });
-			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+			events.emit(SLASH_TEAM_STARTED_EVENT, { requestId });
+			events.emit(SLASH_TEAM_RESPONSE_EVENT, {
 				requestId,
 				result: {
-					content: [{ type: "text", text: "Subagent failed" }],
+					content: [{ type: "text", text: "Team failed" }],
 					details: { mode: "single", results: [] },
 				},
 				isError: true,
-				errorText: "Subagent failed",
+				errorText: "Team failed",
 			});
 		});
 
@@ -175,7 +178,67 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		assert.equal(sent.length, 2, "should send initial + final messages");
 		const final = sent[1] as { customType: string; content: string; display: boolean };
 		assert.equal(final.customType, SLASH_RESULT_TYPE);
-		assert.equal(final.content, "Subagent failed");
+		assert.equal(final.content, "Team failed");
 		assert.equal(final.display, false);
+	});
+
+	it("/team shows the active team and shared tasks in lead sessions", async () => {
+		const sent: unknown[] = [];
+		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+		const pi = {
+			events: createEventBus(),
+			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }) {
+				commands.set(name, spec);
+			},
+			registerShortcut() {},
+			sendMessage(message: unknown) {
+				sent.push(message);
+			},
+		};
+		setCoordinatorMode?.(true);
+		registerSlashCommands!(pi, createState(process.cwd()), {
+			teamManager: {
+				getActiveTeam: () => ({
+					name: "repo-review",
+					description: "Review the repository",
+					defaultModel: "anthropic/claude-haiku-4-5",
+					state: "active",
+					members: [
+						{
+							name: "architecture",
+							agentId: "a1",
+							agentType: "worker",
+							status: "running",
+							updatedAt: Date.now(),
+						},
+					],
+				}),
+				getTeam: () => undefined,
+			},
+			createTaskStore: () => ({
+				listTasks: () => [{
+					id: "task-1234",
+					subject: "Architecture review",
+					description: "Assess boundaries",
+					status: "pending",
+					owner: "architecture",
+					createdAt: Date.now(),
+					updatedAt: Date.now(),
+					version: 1,
+				}],
+			}) as unknown,
+		});
+
+		await commands.get("team")!.handler("", createCommandContext());
+		setCoordinatorMode?.(false);
+
+		assert.equal(sent.length, 1, "should emit one team overview message");
+		const message = sent[0] as { content: string; display: boolean };
+		assert.equal(message.display, true);
+		assert.match(message.content, /\*\*Team:\*\* repo-review \[active\]/);
+		assert.match(message.content, /\*\*Teammates\*\*/);
+		assert.match(message.content, /architecture \[running\]/);
+		assert.match(message.content, /\*\*Tasks\*\*/);
+		assert.match(message.content, /task-1234 \[pending\] owner=architecture Architecture review/);
 	});
 });

@@ -1,5 +1,5 @@
 /**
- * Skill resolution and caching for subagent extension
+ * Skill resolution and caching for team extension
  */
 
 import { execSync } from "node:child_process";

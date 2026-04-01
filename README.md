@@ -4,7 +4,7 @@
 
 # pi-teams
 
-Pi extension for delegating tasks to subagents with chains, parallel execution, **coordinator mode**, TUI clarification, and async support.
+Pi extension for managing teams of agents, shared tasks, raw worker delegation, chains, parallel execution, and async support.
 
 https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1
 
@@ -20,81 +20,145 @@ To remove:
 npx pi-teams --remove
 ```
 
-## Coordinator Mode
+## Team-first workflow
 
-Coordinator mode transforms pi into an autonomous orchestrator. The main LLM plans, delegates to workers, synthesizes results, and reports back.
+Lead sessions use the coordinator prompt by default. Start with the first-class team and task tools. Use the low-level `team` worker tool only when you intentionally want raw worker control.
 
-```bash
-pi --coordinator
-```
-
-Then just describe what you want:
-
-> "Fix the auth bug in src/auth/validate.ts"
-
-The coordinator will:
-1. **Research** — spawn parallel workers to investigate the codebase
-2. **Synthesize** — read findings and craft implementation specs
-3. **Implement** — delegate targeted changes to workers
-4. **Verify** — spawn a verifier to run tests
-
-### Coordinator Tools
+### Primary lead tools
 
 | Tool | Purpose |
 |------|--------|
-| `subagent` | Spawn a worker (fire-and-forget, non-blocking) |
-| `send_message` | Send follow-up to a running worker by name or ID |
-| `task_stop` | Stop a running worker |
+| `team_create` | Create one active team for the current lead session |
+| `spawn_teammate` | Launch a named teammate inside that team |
+| `check_teammate` | Inspect teammate status and last summary |
+| `team_shutdown` | Stop the active team |
+| `task_create` / `task_list` / `task_read` / `task_update` | Manage the shared task list |
 
-### Slash Commands
+### Advanced worker tools
 
-| Command | Description |
-|---------|------------|
-| `/workers` | List all registered workers with status |
-| `/stop-all` | Stop all running workers |
+| Tool | Purpose |
+|------|--------|
+| `team` | Low-level worker execution for single, chain, and parallel runs |
+| `team_status` | Inspect async raw worker runs |
+| `send_message` | Follow up with a running teammate or worker |
+| `task_stop` | Stop a running teammate or worker |
 
-### Configuration
+> `send_message` is running-only. It does not resume completed or stopped work.
 
-- **Max concurrent workers**: 8 (default)
-- **Worker timeout**: 5 minutes (default)
-- **Worker model**: Inherits from session (workers are full pi instances)
+### User says
 
-### Named Workers
-
-Give workers names for easier routing:
-
+```text
+Create a team with 3 teammates to review this repo:
+- architecture on Claude Sonnet
+- testing on Codex
+- docs on Haiku
+Create tasks for each area, wait for them to finish, then synthesize the results.
 ```
-subagent({ agent: "worker", task: "...", name: "researcher" })
-send_message({ to: "researcher", message: "also check test coverage" })
+
+### Lead calls
+
+```ts
+team_create({
+  team_name: "repo-review",
+  description: "Review pi-teams for architecture, tests, and docs",
+  default_model: "anthropic/claude-haiku-4-5"
+})
+
+spawn_teammate({
+  team_name: "repo-review",
+  name: "architecture",
+  prompt: "Review repository architecture and identify structural risks.",
+  cwd: "/home/vadim/Code/pi-teams",
+  model: "anthropic/claude-sonnet-4-6"
+})
+
+spawn_teammate({
+  team_name: "repo-review",
+  name: "testing",
+  prompt: "Review tests, missing coverage, and regression risks.",
+  cwd: "/home/vadim/Code/pi-teams",
+  model: "openai/gpt-5.3-codex"
+})
+
+spawn_teammate({
+  team_name: "repo-review",
+  name: "docs",
+  prompt: "Review docs drift, README accuracy, and user contract clarity.",
+  cwd: "/home/vadim/Code/pi-teams",
+  // Uses default_model fallback
+})
+
+task_create({
+  team_name: "repo-review",
+  subject: "Architecture review",
+  description: "Assess boundaries, naming, and rollout risks."
+})
+
+task_create({
+  team_name: "repo-review",
+  subject: "Testing review",
+  description: "Find missing tests, weak assertions, and integration gaps."
+})
+
+task_create({
+  team_name: "repo-review",
+  subject: "Docs review",
+  description: "Check README/help/install output against the real tool surface."
+})
+
+check_teammate({ team_name: "repo-review", agent_name: "architecture" })
+check_teammate({ team_name: "repo-review", agent_name: "testing" })
+check_teammate({ team_name: "repo-review", agent_name: "docs" })
+
+// Wait for teammates to finish, then synthesize their results for the user.
 ```
 
----
+### Operator command
 
-If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), you can wrap subagent delegation in a slash command:
+```text
+/team repo-review
+/workers
+/stop-all
+```
+
+Use `default_model` on `team_create` for the team-wide fallback. Override `model` per teammate only when one role needs something different.
+
+If you want pure tool visibility instead of slash commands, use:
+
+```ts
+task_list({ team_name: "repo-review" })
+check_teammate({ team_name: "repo-review", agent_name: "architecture" })
+check_teammate({ team_name: "repo-review", agent_name: "testing" })
+check_teammate({ team_name: "repo-review", agent_name: "docs" })
+```
+
+### Prompt-template delegation (advanced)
+
+If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), you can wrap team delegation in a slash command:
 
 ```markdown
 ---
 description: Take a screenshot
 model: claude-sonnet-4-20250514
-subagent: browser-screenshoter
+team: browser-screenshoter
 cwd: /tmp/screenshots
 ---
 Use url in the prompt to take screenshot: $@
 ```
 
-Then `/take-screenshot https://example.com` switches to Sonnet, delegates to the `browser-screenshoter` agent with `/tmp/screenshots` as the working directory, and restores your model when done. Runtime overrides like `--cwd=<path>` and `--subagent=<name>` work too.
+Then `/take-screenshot https://example.com` switches to Sonnet, delegates to the `browser-screenshoter` agent with `/tmp/screenshots` as the working directory, and restores your model when done. Runtime overrides like `--cwd=<path>` and `--team=<name>` work too.
 
-pi-prompt-template-model is entirely optional — pi-subagents works standalone through the `subagent` tool and slash commands.
+pi-prompt-template-model is entirely optional, pi-teams works standalone through the first-class team tools and advanced worker slash commands below.
 
 ## Agents
 
-Agents are markdown files with YAML frontmatter that define specialized subagent configurations.
+Agents are markdown files with YAML frontmatter that define specialized worker configurations.
 
 **Agent file locations:**
 
 | Scope | Path | Priority |
 |-------|------|----------|
-| Builtin | `~/.pi/agent/extensions/subagent/agents/` | Lowest |
+| Builtin | `~/.pi/agent/extensions/pi-teams/agents/` | Lowest |
 | User | `~/.pi/agent/agents/{name}.md` | Medium |
 | Project | `.pi/agents/{name}.md` (searches up directory tree) | Highest |
 
@@ -128,7 +192,7 @@ The `thinking` field sets a default extended thinking level for the agent. At ru
 
 **Extension sandboxing**
 
-Use `extensions` in frontmatter to control which extensions a subagent can access:
+Use `extensions` in frontmatter to control which extensions a worker can access:
 
 ```yaml
 # Field absent: all extensions load (default behavior)
@@ -149,7 +213,7 @@ When `extensions` is present, it takes precedence over extension paths implied b
 
 **MCP Tools (optional)**
 
-If you have the [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) extension installed, subagents can use MCP server tools directly. Without that extension, everything below is ignored — MCP integration is entirely optional.
+If you have the [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) extension installed, workers can use MCP server tools directly. Without that extension, everything below is ignored, MCP integration is entirely optional.
 
 Add `mcp:` prefixed entries to the `tools` field in agent frontmatter:
 
@@ -168,7 +232,7 @@ tools: read, bash, mcp:github/search_repositories, mcp:github/get_file_contents
 
 The `mcp:` items are additive — they don't affect which builtins the agent gets. `tools: mcp:chrome-devtools` (with no regular tools listed) gives the agent all default builtins plus chrome-devtools tools. To restrict builtins, list them explicitly: `tools: read, bash, mcp:chrome-devtools`.
 
-Subagents only get direct MCP tools when `mcp:` items are explicitly listed. Even if your `mcp.json` has `directTools: true` globally, a subagent without `mcp:` in its frontmatter won't get any direct tools — keeping it lean. The `mcp` proxy tool is still available for discovery if needed.
+Workers only get direct MCP tools when `mcp:` items are explicitly listed. Even if your `mcp.json` has `directTools: true` globally, a worker without `mcp:` in its frontmatter won't get any direct tools, keeping it lean. The `mcp` proxy tool is still available for discovery if needed.
 
 > **First-run caveat:** The MCP adapter caches tool metadata at startup. The first time you connect to a new MCP server, that cache is empty, so tools are only available through the generic `mcp` proxy. After that first session, restart pi and direct tools become available.
 
@@ -240,7 +304,7 @@ Add `--bg` at the end of any slash command to run in the background:
 /parallel scout "scan frontend" -> scout "scan backend" -> scout "scan infra" --bg
 ```
 
-Without `--bg`, the run is foreground: the tool call stays active and streams progress until completion. With `--bg`, the run is launched asynchronously: control returns immediately, and completion arrives later via notification. In both cases subagents run as separate processes. Check status with `subagent_status`.
+Without `--bg`, the run is foreground: the tool call stays active and streams progress until completion. With `--bg`, the run is launched asynchronously: control returns immediately, and completion arrives later via notification. In both cases workers run as separate processes. Check status with `team_status`.
 
 ### Forked Context Execution
 
@@ -477,9 +541,9 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 
 ## Usage
 
-These are the parameters the **LLM agent** passes when it calls the `subagent` tool — not something you type directly. The agent decides to use these based on your conversation. For user-facing commands, see [Quick Commands](#quick-commands) above.
+These are the parameters the **LLM agent** passes when it calls the `team` tool, not something you type directly. The agent decides to use these based on your conversation. For user-facing commands, see [Quick Commands](#quick-commands) above.
 
-**subagent tool parameters:**
+**team tool parameters:**
 ```typescript
 // Single agent
 { agent: "worker", task: "refactor auth" }
@@ -549,15 +613,15 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
 ], clarify: false, async: true }
 ```
 
-**subagent_status tool:**
+**team_status tool:**
 ```typescript
 { id: "a53ebe46" }
-{ dir: "<tmpdir>/pi-async-subagent-runs/a53ebe46-..." }
+{ dir: "<tmpdir>/pi-async-team-runs/a53ebe46-..." }
 ```
 
 ## Management Actions
 
-Agent definitions are not loaded into LLM context by default. Management actions let the LLM discover, inspect, create, and modify agent and chain definitions at runtime through the `subagent` tool — no manual file editing or restart required. Newly created agents are immediately usable in the same session. Set `action` and omit execution payloads (`task`, `chain`, `tasks`).
+Agent definitions are not loaded into LLM context by default. Management actions let the LLM discover, inspect, create, and modify agent and chain definitions at runtime through the `team` tool, with no manual file editing or restart required. Newly created agents are immediately usable in the same session. Set `action` and omit execution payloads (`task`, `chain`, `tasks`).
 
 ```typescript
 // Discover all agents and chains (management defaults to both scopes)
@@ -684,7 +748,7 @@ Status tool:
 
 | Tool | Description |
 |------|-------------|
-| `subagent_status` | Inspect async run status by id or dir |
+| `team_status` | Inspect async run status by id or dir |
 
 ## Chain Variables
 
@@ -710,7 +774,7 @@ This aggregated output becomes `{previous}` for the next step.
 
 ## Extension Configuration
 
-`pi-subagents` reads optional JSON config from `~/.pi/agent/extensions/subagent/config.json`.
+`pi-teams` reads optional JSON config from `~/.pi/agent/extensions/pi-teams/config.json`.
 
 ### `defaultSessionDir`
 
@@ -718,16 +782,16 @@ This aggregated output becomes `{previous}` for the next step.
 
 ```json
 {
-  "defaultSessionDir": "~/.pi/agent/sessions/subagent/"
+  "defaultSessionDir": "~/.pi/agent/sessions/team/"
 }
 ```
 
 Session root resolution follows this precedence:
-1. `params.sessionDir` from the `subagent` tool call
+1. `params.sessionDir` from the `team` tool call
 2. `config.defaultSessionDir`
 3. Derived from parent session (stored alongside parent session file)
 
-Sessions are always enabled — every subagent run gets a session directory for tracking.
+Sessions are always enabled, every worker run gets a session directory for tracking.
 
 ## Chain Directory
 Each chain run creates `<tmpdir>/pi-chain-runs/{runId}/` containing:
@@ -743,7 +807,7 @@ Directories older than 24 hours are cleaned up on extension startup.
 
 ## Artifacts
 
-Location: `{sessionDir}/subagent-artifacts/` or `<tmpdir>/pi-subagent-artifacts/`
+Location: `{sessionDir}/team-artifacts/` or `<tmpdir>/pi-team-artifacts/`
 
 Files per task:
 - `{runId}_{agent}_input.md` - Task prompt
@@ -795,48 +859,48 @@ Press **Ctrl+O** to expand the full streaming view with complete output per step
 
 > **Note:** Chain visualization (the `✓scout → ●planner` line) is only shown for sequential chains. Chains with parallel steps show per-step cards instead.
 
-## Nested subagent recursion guard
+## Nested worker recursion guard
 
-Subagents can themselves call the `subagent` tool, which risks unbounded recursive spawning (slow, expensive, hard to observe). A depth guard prevents this.
+Workers can themselves call the `team` tool, which risks unbounded recursive spawning (slow, expensive, hard to observe). A depth guard prevents this.
 
-By default nesting is limited to **2 levels**: `main session → subagent → sub-subagent`. Any deeper `subagent` calls are blocked and return an error with guidance to the calling agent.
+By default nesting is limited to **2 levels**: `main session → worker → nested worker`. Any deeper `team` calls are blocked and return an error with guidance to the calling agent.
 
-Override the limit with `PI_SUBAGENT_MAX_DEPTH` **set before starting `pi`**:
+Override the limit with `PI_TEAM_MAX_DEPTH` **set before starting `pi`**:
 
 ```bash
-export PI_SUBAGENT_MAX_DEPTH=3   # allow one more level (use with caution)
-export PI_SUBAGENT_MAX_DEPTH=1   # only allow direct subagents, no nesting
-export PI_SUBAGENT_MAX_DEPTH=0   # disable the subagent tool entirely
+export PI_TEAM_MAX_DEPTH=3   # allow one more level (use with caution)
+export PI_TEAM_MAX_DEPTH=1   # only allow direct workers, no nesting
+export PI_TEAM_MAX_DEPTH=0   # disable worker delegation entirely
 ```
 
-`PI_SUBAGENT_DEPTH` is an internal variable propagated automatically to child processes -- don't set it manually.
+`PI_TEAM_DEPTH` is an internal variable propagated automatically to child processes -- don't set it manually.
 
 ## Async observability
 
 Async runs write a dedicated observability folder:
 
 ```
-<tmpdir>/pi-async-subagent-runs/<id>/
+<tmpdir>/pi-async-team-runs/<id>/
   status.json
   events.jsonl
-  subagent-log-<id>.md
+  team-log-<id>.md
 ```
 
 `status.json` is the source of truth for async progress and powers the TUI widget. If you already use
 `/status <id>` you can keep doing that; otherwise use:
 
 ```typescript
-subagent_status({ id: "<id>" })
-subagent_status({ dir: "<tmpdir>/pi-async-subagent-runs/<id>" })
+team_status({ id: "<id>" })
+team_status({ dir: "<tmpdir>/pi-async-team-runs/<id>" })
 ```
 
 ## Events
 
 Async events:
-- `subagent:started`
-- `subagent:complete`
+- `team:started`
+- `team:complete`
 
-`notify.ts` consumes `subagent:complete` as the canonical completion channel.
+`notify.ts` consumes `team:complete` as the canonical completion channel.
 
 ## Files
 
@@ -856,7 +920,7 @@ Async events:
 ├── schemas.ts                    # TypeBox parameter schemas
 ├── utils.ts                      # Shared utility functions (mapConcurrent, readStatus, etc.)
 ├── types.ts                      # Shared types and constants
-├── subagent-runner.ts            # Async runner (detached process)
+├── team-runner.ts            # Async runner (detached process)
 ├── parallel-utils.ts             # Parallel execution utilities for async runner
 ├── pi-spawn.ts                   # Cross-platform pi CLI spawning
 ├── single-output.ts              # Solo agent output file handling

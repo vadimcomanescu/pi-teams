@@ -3,11 +3,11 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { buildCompletionKey, markSeenWithTtl } from "./completion-dedupe.js";
 import { createFileCoalescer } from "./file-coalescer.js";
-import type { SubagentState } from "./types.js";
+import type { TeamState } from "./types.js";
 
 export function createResultWatcher(
 	pi: ExtensionAPI,
-	state: SubagentState,
+	state: TeamState,
 	resultsDir: string,
 	completionTtlMs: number,
 ): {
@@ -35,7 +35,7 @@ export function createResultWatcher(
 				return;
 			}
 
-			pi.events.emit("subagent:complete", data);
+			pi.events.emit("team:complete", data);
 			fs.unlinkSync(resultPath);
 		} catch {}
 	};

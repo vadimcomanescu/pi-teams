@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe("resolveSingleOutputPath", () => {
 	it("keeps absolute paths unchanged", () => {
-		const absolutePath = path.join(os.tmpdir(), "pi-subagents-abs", "report.md");
+		const absolutePath = path.join(os.tmpdir(), "pi-teams-abs", "report.md");
 		const resolved = resolveSingleOutputPath(absolutePath, "/repo", "/override");
 		assert.equal(resolved, absolutePath);
 	});
@@ -47,7 +47,7 @@ describe("injectSingleOutputInstruction", () => {
 
 describe("finalizeSingleOutput", () => {
 	it("persists full output while displaying truncated output", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-output-test-"));
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-teams-output-test-"));
 		tempDirs.push(dir);
 		const outputPath = path.join(dir, "review.md");
 		const fullOutput = "line 1\nline 2\nline 3";
@@ -66,7 +66,7 @@ describe("finalizeSingleOutput", () => {
 	});
 
 	it("does not write output file on failed runs", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-output-test-"));
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-teams-output-test-"));
 		tempDirs.push(dir);
 		const outputPath = path.join(dir, "review.md");
 

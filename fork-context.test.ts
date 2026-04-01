@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createForkContextResolver, resolveSubagentContext } from "./fork-context.ts";
+import { createForkContextResolver, resolveTeamContext } from "./fork-context.ts";
 
-describe("resolveSubagentContext", () => {
+describe("resolveTeamContext", () => {
 	it("defaults to fresh", () => {
-		assert.equal(resolveSubagentContext(undefined), "fresh");
-		assert.equal(resolveSubagentContext("anything"), "fresh");
+		assert.equal(resolveTeamContext(undefined), "fresh");
+		assert.equal(resolveTeamContext("anything"), "fresh");
 	});
 
 	it("accepts fork", () => {
-		assert.equal(resolveSubagentContext("fork"), "fork");
+		assert.equal(resolveTeamContext("fork"), "fork");
 	});
 });
 
@@ -36,7 +36,7 @@ describe("createForkContextResolver", () => {
 				getLeafId: () => "leaf-123",
 				createBranchedSession: () => "/tmp/child.jsonl",
 			}, "fork"),
-			/Forked subagent context requires a persisted parent session\./,
+			/Forked team context requires a persisted parent session\./,
 		);
 	});
 
@@ -47,7 +47,7 @@ describe("createForkContextResolver", () => {
 				getLeafId: () => null,
 				createBranchedSession: () => "/tmp/child.jsonl",
 			}, "fork"),
-			/Forked subagent context requires a current leaf to fork from\./,
+			/Forked team context requires a current leaf to fork from\./,
 		);
 	});
 
@@ -116,7 +116,7 @@ describe("createForkContextResolver", () => {
 
 		assert.throws(
 			() => resolver.sessionFileForIndex(0),
-			/Failed to create forked subagent session: Session manager did not return a session file\./,
+			/Failed to create forked team session: Session manager did not return a session file\./,
 		);
 	});
 });

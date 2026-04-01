@@ -23,7 +23,12 @@ import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
 import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async-execution.js";
 import { createForkContextResolver } from "./fork-context.js";
 import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.js";
-import { isCoordinatorMode, getCoordinatorSettings } from "./coordinator.js";
+import {
+	buildRuntimeEnv,
+	getCoordinatorSettings,
+	type RuntimeRole,
+	type TeammateRuntimeMetadata,
+} from "./coordinator.js";
 import type { AgentRegistry } from "./agent-registry.js";
 import { getFinalOutput, mapConcurrent } from "./utils.js";
 import {
@@ -34,11 +39,11 @@ import {
 	type ExtensionConfig,
 	type MaxOutputConfig,
 	type SingleResult,
-	type SubagentState,
+	type TeamState,
 	DEFAULT_ARTIFACT_CONFIG,
 	MAX_CONCURRENCY,
 	MAX_PARALLEL,
-	checkSubagentDepth,
+	checkTeamDepth,
 	wrapForkTask,
 } from "./types.js";
 
@@ -53,7 +58,7 @@ interface TaskParam {
 	progress?: boolean;
 }
 
-export interface SubagentParamsLike {
+export interface TeamParamsLike {
 	action?: string;
 	agent?: string;
 	task?: string;
@@ -74,22 +79,24 @@ export interface SubagentParamsLike {
 	output?: string | boolean;
 	agentScope?: unknown;
 	chainDir?: string;
+	runtimeRole?: RuntimeRole;
+	teamMetadata?: TeammateRuntimeMetadata;
 }
 
 interface ExecutorDeps {
 	pi: ExtensionAPI;
-	state: SubagentState;
+	state: TeamState;
 	config: ExtensionConfig;
 	asyncByDefault: boolean;
 	tempArtifactsDir: string;
-	getSubagentSessionRoot: (parentSessionFile: string | null) => string;
+	getTeamSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
 	discoverAgents: (cwd: string, scope: AgentScope) => { agents: AgentConfig[] };
 	registry?: AgentRegistry;
 }
 
 interface ExecutionContextData {
-	params: SubagentParamsLike;
+	params: TeamParamsLike;
 	ctx: ExtensionContext;
 	signal: AbortSignal;
 	onUpdate?: (r: AgentToolResult<Details>) => void;
@@ -106,7 +113,7 @@ interface ExecutionContextData {
 }
 
 function validateExecutionInput(
-	params: SubagentParamsLike,
+	params: TeamParamsLike,
 	agents: AgentConfig[],
 	hasChain: boolean,
 	hasTasks: boolean,
@@ -176,7 +183,7 @@ function validateExecutionInput(
 	return null;
 }
 
-function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
+function getRequestedModeLabel(params: TeamParamsLike): Details["mode"] {
 	if ((params.chain?.length ?? 0) > 0) return "chain";
 	if ((params.tasks?.length ?? 0) > 0) return "parallel";
 	if (params.agent && params.task) return "single";
@@ -185,7 +192,7 @@ function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
 
 function withForkContext(
 	result: AgentToolResult<Details>,
-	context: SubagentParamsLike["context"],
+	context: TeamParamsLike["context"],
 ): AgentToolResult<Details> {
 	if (context !== "fork" || !result.details) return result;
 	return {
@@ -197,7 +204,7 @@ function withForkContext(
 	};
 }
 
-function toExecutionErrorResult(params: SubagentParamsLike, error: unknown): AgentToolResult<Details> {
+function toExecutionErrorResult(params: TeamParamsLike, error: unknown): AgentToolResult<Details> {
 	const message = error instanceof Error ? error.message : String(error);
 	return withForkContext(
 		{
@@ -229,7 +236,7 @@ function collectChainSessionFiles(
 	return sessionFiles;
 }
 
-function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["context"]): ChainStep[] {
+function wrapChainTasksForFork(chain: ChainStep[], context: TeamParamsLike["context"]): ChainStep[] {
 	if (context !== "fork") return chain;
 	return chain.map((step, stepIndex) => {
 		if (isParallelStep(step)) {
@@ -249,12 +256,17 @@ function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["
 	});
 }
 
+function getWorkerExtraEnv(params: TeamParamsLike): Record<string, string> {
+	const role = params.runtimeRole ?? "raw-worker";
+	return buildRuntimeEnv(role === "lead" ? "raw-worker" : role, params.teamMetadata);
+}
+
 // =============================================================================
 // Coordinator Worker Spawn (fire-and-forget RPC)
 // =============================================================================
 
 interface CoordinatorSpawnInput {
-	params: SubagentParamsLike;
+	params: TeamParamsLike;
 	agents: AgentConfig[];
 	ctx: ExtensionContext;
 	signal: AbortSignal;
@@ -318,6 +330,7 @@ function spawnCoordinatorWorker(
 		maxOutput: params.maxOutput,
 		modelOverride,
 		skills: effectiveSkills,
+		extraEnv: getWorkerExtraEnv(params),
 		onSpawn: (proc) => {
 			registry.register({
 				id: workerId,
@@ -334,7 +347,7 @@ function spawnCoordinatorWorker(
 	});
 
 	// Emit started (outside onSpawn to avoid double-registration in index.ts handler)
-	deps.pi.events.emit("subagent:started", {
+	deps.pi.events.emit("team:started", {
 		id: workerId,
 		agent: params.agent,
 		name: workerName,
@@ -346,7 +359,7 @@ function spawnCoordinatorWorker(
 	promise.then((result) => {
 		const output = getFinalOutput(result.messages);
 		registry.updateStatus(workerId, result.exitCode === 0 ? "completed" : "failed", output);
-		deps.pi.events.emit("subagent:complete", {
+		deps.pi.events.emit("team:complete", {
 			id: workerId,
 			agent: params.agent,
 			name: workerName,
@@ -659,6 +672,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			maxOutput: params.maxOutput,
 			modelOverride: modelOverrides[i],
 			skills: effectiveSkills === false ? [] : effectiveSkills,
+			extraEnv: getWorkerExtraEnv(params),
 			onUpdate: onUpdate
 				? (p) => {
 						const stepResults = p.details?.results || [];
@@ -851,6 +865,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		onUpdate,
 		modelOverride,
 		skills: effectiveSkills,
+		extraEnv: getWorkerExtraEnv(params),
 	});
 	recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0);
 
@@ -889,10 +904,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	};
 }
 
-export function createSubagentExecutor(deps: ExecutorDeps): {
+export function createTeamExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
-		params: SubagentParamsLike,
+		params: TeamParamsLike,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
@@ -900,7 +915,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 } {
 	const execute = async (
 		_id: string,
-		params: SubagentParamsLike,
+		params: TeamParamsLike,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
@@ -918,16 +933,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return handleManagementAction(params.action, params, ctx);
 		}
 
-		const { blocked, depth, maxDepth } = checkSubagentDepth();
+		const { blocked, depth, maxDepth } = checkTeamDepth();
 		if (blocked) {
 			return {
 				content: [
 					{
 						type: "text",
 						text:
-							`Nested subagent call blocked (depth=${depth}, max=${maxDepth}). ` +
-							"You are running at the maximum subagent nesting depth. " +
-							"Complete your current task directly without delegating to further subagents.",
+							`Nested team call blocked (depth=${depth}, max=${maxDepth}). ` +
+							"You are running at the maximum team nesting depth. " +
+							"Complete your current task directly without delegating to further teams.",
 					},
 				],
 				isError: true,
@@ -985,7 +1000,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} else {
 			const baseSessionRoot = deps.config.defaultSessionDir
 				? path.resolve(deps.expandTilde(deps.config.defaultSessionDir))
-				: deps.getSubagentSessionRoot(parentSessionFile);
+				: deps.getTeamSessionRoot(parentSessionFile);
 			sessionRoot = path.join(baseSessionRoot, runId);
 		}
 		try {

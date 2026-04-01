@@ -63,7 +63,7 @@ describe("getPiSpawnCommand", () => {
 		const deps = makeDeps({
 			platform: "win32",
 			execPath: "/usr/local/bin/node",
-			argv1: "/opt/pi/subagent-runner.ts",
+			argv1: "/opt/pi/team-runner.ts",
 			packageJsonPath,
 			packageJsonContent: JSON.stringify({ bin: { pi: "dist/cli/index.js" } }),
 			existing: [packageJsonPath, cliPath],
@@ -76,7 +76,7 @@ describe("getPiSpawnCommand", () => {
 	it("falls back to pi when Windows CLI script cannot be resolved", () => {
 		const deps = makeDeps({
 			platform: "win32",
-			argv1: "/opt/pi/subagent-runner.ts",
+			argv1: "/opt/pi/team-runner.ts",
 			existing: [],
 		});
 		const args = ["-p", "Task: hello"]; 
@@ -92,7 +92,7 @@ describe("getPiSpawnCommand with piPackageRoot", () => {
 		const deps = makeDeps({
 			platform: "win32",
 			execPath: "/usr/local/bin/node",
-			argv1: "/opt/pi/subagent-runner.ts",
+			argv1: "/opt/pi/team-runner.ts",
 			packageJsonPath,
 			packageJsonContent: JSON.stringify({ bin: { pi: "dist/cli/index.js" } }),
 			existing: [packageJsonPath, cliPath],
@@ -110,7 +110,7 @@ describe("resolveWindowsPiCliScript", () => {
 		const cliPath = path.resolve(path.dirname(packageJsonPath), "dist/cli/index.mjs");
 		const deps = makeDeps({
 			platform: "win32",
-			argv1: "/opt/pi/subagent-runner.ts",
+			argv1: "/opt/pi/team-runner.ts",
 			packageJsonPath,
 			packageJsonContent: JSON.stringify({ bin: "dist/cli/index.mjs" }),
 			existing: [packageJsonPath, cliPath],

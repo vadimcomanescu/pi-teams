@@ -97,7 +97,7 @@ describe("slash live state", { skip: !available ? "slash-live-state.ts not impor
 				type: "message",
 				message: {
 					role: "custom",
-					customType: "subagent-slash-result",
+					customType: "team-slash-result",
 					display: false,
 					details: finalDetails,
 				},

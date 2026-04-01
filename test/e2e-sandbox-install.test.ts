@@ -20,19 +20,31 @@ describe(
 	() => {
 		const { verifySandboxInstall } = harness;
 
-		it("loads extension after npm pack+install with expected tools", { timeout: 120_000 }, async () => {
+		it("loads extension after npm pack+install with the team-first tool surface", { timeout: 120_000 }, async () => {
 			const result = await verifySandboxInstall({
 				packageDir: PACKAGE_DIR,
 				expect: {
 					extensions: 2,
-					tools: ["subagent", "subagent_status"],
+					tools: ["team", "team_status"],
 				},
 			});
 
 			assert.deepEqual(result.loaded.extensionErrors, []);
 			assert.equal(result.loaded.extensions, 2);
-			assert.ok(result.loaded.tools.includes("subagent"));
-			assert.ok(result.loaded.tools.includes("subagent_status"));
+			for (const toolName of [
+				"team",
+				"team_status",
+				"team_create",
+				"spawn_teammate",
+				"check_teammate",
+				"team_shutdown",
+				"task_create",
+				"task_list",
+				"task_read",
+				"task_update",
+			]) {
+				assert.ok(result.loaded.tools.includes(toolName), `loaded tools should include ${toolName}`);
+			}
 		});
 	},
 );

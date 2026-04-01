@@ -1,5 +1,5 @@
 /**
- * Async execution logic for subagent tool
+ * Async execution logic for team tool
  */
 
 import { spawn } from "node:child_process";
@@ -104,7 +104,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string): number | undefin
 	
 	const cfgPath = path.join(os.tmpdir(), `pi-async-cfg-${suffix}.json`);
 	fs.writeFileSync(cfgPath, JSON.stringify(cfg));
-	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
+	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "team-runner.ts");
 	
 	const proc = spawn("node", [jitiCliPath, runner, cfgPath], {
 		cwd,
@@ -253,7 +253,7 @@ export function executeAsyncChain(
 		const firstAgents = isParallelStep(firstStep)
 			? firstStep.parallel.map((t) => t.agent)
 			: [(firstStep as SequentialStep).agent];
-		ctx.pi.events.emit("subagent:started", {
+		const startedEvent = {
 			id,
 			pid,
 			agent: firstAgents[0],
@@ -265,7 +265,8 @@ export function executeAsyncChain(
 			),
 			cwd: runnerCwd,
 			asyncDir,
-		});
+		};
+		ctx.pi.events.emit("team:started", startedEvent);
 	}
 
 	// Build chain description with parallel groups shown as [agent1+agent2]
@@ -359,14 +360,15 @@ export function executeAsyncSingle(
 	);
 
 	if (pid) {
-		ctx.pi.events.emit("subagent:started", {
+		const startedEvent = {
 			id,
 			pid,
 			agent,
 			task: task?.slice(0, 50),
 			cwd: runnerCwd,
 			asyncDir,
-		});
+		};
+		ctx.pi.events.emit("team:started", startedEvent);
 	}
 
 	return {

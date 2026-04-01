@@ -1,12 +1,12 @@
 /**
- * E2E tests: subagent tool behavior through the real pi runtime.
+ * E2E tests: team tool behavior through the real pi runtime.
  *
  * Uses pi-test-harness createTestSession to test the tool handler with
  * playbook-scripted model actions. The extension loads for real, tools
  * register for real, hooks fire for real — only the model is replaced.
  *
  * For execution tests (single, chain, parallel), createMockPi() from
- * @marcfargas/pi-test-harness handles the spawned subagent processes.
+ * @marcfargas/pi-test-harness handles the spawned team processes.
  */
 
 import { describe, it, afterEach } from "node:test";
@@ -51,7 +51,7 @@ function writeTestAgents(cwd: string, agents: Array<{ name: string; description?
 	}
 }
 
-describe("subagent tool — management", { skip: !available ? "pi-test-harness not available" : undefined }, () => {
+describe("team tool — management", { skip: !available ? "pi-test-harness not available" : undefined }, () => {
 	const { createTestSession, when, calls, says } = harness;
 	let t: any;
 
@@ -79,12 +79,12 @@ describe("subagent tool — management", { skip: !available ? "pi-test-harness n
 
 		await t.run(
 			when("List available agents", [
-				calls("subagent", { action: "list", agentScope: "project" }),
+				calls("team", { action: "list", agentScope: "project" }),
 				says("Found the agents."),
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(!results[0].isError, "should not be an error");
 		assert.ok(results[0].text.includes("scout"), `should list scout: ${results[0].text.slice(0, 200)}`);
@@ -101,19 +101,19 @@ describe("subagent tool — management", { skip: !available ? "pi-test-harness n
 
 		await t.run(
 			when("Get scout agent details", [
-				calls("subagent", { action: "get", agent: "scout", agentScope: "project" }),
+				calls("team", { action: "get", agent: "scout", agentScope: "project" }),
 				says("Here are the details."),
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(!results[0].isError);
 		assert.ok(results[0].text.includes("scout"));
 	});
 });
 
-describe("subagent tool — validation", { skip: !available ? "pi-test-harness not available" : undefined }, () => {
+describe("team tool — validation", { skip: !available ? "pi-test-harness not available" : undefined }, () => {
 	const { createTestSession, when, calls, says } = harness;
 	let t: any;
 
@@ -130,12 +130,12 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 
 		await t.run(
 			when("Do something invalid", [
-				calls("subagent", { action: "invalid_action" }),
+				calls("team", { action: "invalid_action" }),
 				says("That failed."),
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(results[0].isError, "should be an error");
 		assert.ok(results[0].text.includes("Unknown action"));
@@ -149,7 +149,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 
 		await t.run(
 			when("Ambiguous call", [
-				calls("subagent", {
+				calls("team", {
 					agent: "test",
 					task: "do something",
 					chain: [{ agent: "a", task: "start" }],
@@ -158,7 +158,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(results[0].isError, "should be an error");
 		assert.ok(results[0].text.includes("exactly one mode") || results[0].text.includes("Provide exactly one"));
@@ -172,12 +172,12 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 
 		await t.run(
 			when("Call nonexistent agent", [
-				calls("subagent", { agent: "nonexistent_agent_xyz", task: "hello" }),
+				calls("team", { agent: "nonexistent_agent_xyz", task: "hello" }),
 				says("Agent not found."),
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(results[0].isError, "should be an error");
 		assert.ok(results[0].text.includes("Unknown") || results[0].text.includes("nonexistent"));
@@ -193,7 +193,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 
 		await t.run(
 			when("Chain with bad agent", [
-				calls("subagent", {
+				calls("team", {
 					chain: [
 						{ agent: "scout", task: "start" },
 						{ agent: "nonexistent_agent_xyz" },
@@ -204,7 +204,7 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(results[0].isError, "should be an error");
 		assert.ok(results[0].text.includes("Unknown agent") || results[0].text.includes("nonexistent"));
@@ -218,18 +218,18 @@ describe("subagent tool — validation", { skip: !available ? "pi-test-harness n
 
 		await t.run(
 			when("Empty chain", [
-				calls("subagent", { chain: [] }),
+				calls("team", { chain: [] }),
 				says("Chain must have steps."),
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(results[0].isError);
 	});
 });
 
-describe("subagent tool — single execution", { skip: !available ? "pi-test-harness not available" : undefined }, () => {
+describe("team tool — single execution", { skip: !available ? "pi-test-harness not available" : undefined }, () => {
 	const { createTestSession, when, calls, says } = harness;
 	let t: any;
 
@@ -239,7 +239,7 @@ describe("subagent tool — single execution", { skip: !available ? "pi-test-har
 	});
 
 	it("executes single agent and returns output", async () => {
-		mockPi?.onCall({ output: "Hello from the subagent!" });
+		mockPi?.onCall({ output: "Hello from the team!" });
 
 		t = await createTestSession({
 			extensions: [EXTENSION],
@@ -250,15 +250,15 @@ describe("subagent tool — single execution", { skip: !available ? "pi-test-har
 
 		await t.run(
 			when("Run the echo agent", [
-				calls("subagent", { agent: "echo", task: "Say hello", clarify: false, agentScope: "project" }),
+				calls("team", { agent: "echo", task: "Say hello", clarify: false, agentScope: "project" }),
 				says("The agent responded."),
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(!results[0].isError, `should succeed: ${results[0].text.slice(0, 200)}`);
-		assert.ok(results[0].text.includes("Hello from the subagent"), `should contain output: ${results[0].text.slice(0, 200)}`);
+		assert.ok(results[0].text.includes("Hello from the team"), `should contain output: ${results[0].text.slice(0, 200)}`);
 	});
 
 	it("returns error for failed agent", async () => {
@@ -273,12 +273,12 @@ describe("subagent tool — single execution", { skip: !available ? "pi-test-har
 
 		await t.run(
 			when("Run the crasher", [
-				calls("subagent", { agent: "crasher", task: "Crash please", clarify: false, agentScope: "project" }),
+				calls("team", { agent: "crasher", task: "Crash please", clarify: false, agentScope: "project" }),
 				says("It failed."),
 			]),
 		);
 
-		const results = t.events.toolResultsFor("subagent");
+		const results = t.events.toolResultsFor("team");
 		assert.equal(results.length, 1);
 		assert.ok(results[0].isError, "should be an error");
 	});

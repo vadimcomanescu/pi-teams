@@ -1,7 +1,7 @@
 /**
  * Integration tests for chain execution (sequential and parallel steps).
  *
- * Uses createMockPi() from @marcfargas/pi-test-harness to simulate subagent
+ * Uses createMockPi() from @marcfargas/pi-test-harness to simulate team
  * processes. Tests the full chain pipeline: template resolution → spawn →
  * output capture → {previous} passing.
  *

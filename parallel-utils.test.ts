@@ -6,7 +6,7 @@ import {
 	mapConcurrent,
 	aggregateParallelOutputs,
 	MAX_PARALLEL_CONCURRENCY,
-	type RunnerSubagentStep,
+	type RunnerTeamStep,
 	type ParallelStepGroup,
 	type RunnerStep,
 } from "./parallel-utils.ts";
@@ -23,7 +23,7 @@ describe("isParallelGroup", () => {
 	});
 
 	it("returns false for a sequential step", () => {
-		const step: RunnerSubagentStep = { agent: "a", task: "do stuff" };
+		const step: RunnerTeamStep = { agent: "a", task: "do stuff" };
 		assert.equal(isParallelGroup(step), false);
 	});
 

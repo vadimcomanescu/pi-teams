@@ -1,8 +1,8 @@
-export const PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT = "prompt-template:subagent:request";
-export const PROMPT_TEMPLATE_SUBAGENT_STARTED_EVENT = "prompt-template:subagent:started";
-export const PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT = "prompt-template:subagent:response";
-export const PROMPT_TEMPLATE_SUBAGENT_UPDATE_EVENT = "prompt-template:subagent:update";
-export const PROMPT_TEMPLATE_SUBAGENT_CANCEL_EVENT = "prompt-template:subagent:cancel";
+export const PROMPT_TEMPLATE_TEAM_REQUEST_EVENT = "prompt-template:team:request";
+export const PROMPT_TEMPLATE_TEAM_STARTED_EVENT = "prompt-template:team:started";
+export const PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT = "prompt-template:team:response";
+export const PROMPT_TEMPLATE_TEAM_UPDATE_EVENT = "prompt-template:team:update";
+export const PROMPT_TEMPLATE_TEAM_CANCEL_EVENT = "prompt-template:team:cancel";
 
 export interface PromptTemplateDelegationTask {
 	agent: string;
@@ -259,7 +259,7 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 		if (typeof unsubscribe === "function") subscriptions.push(unsubscribe);
 	};
 
-	subscribe(PROMPT_TEMPLATE_SUBAGENT_CANCEL_EVENT, (data) => {
+	subscribe(PROMPT_TEMPLATE_TEAM_CANCEL_EVENT, (data) => {
 		if (!data || typeof data !== "object") return;
 		const requestId = (data as { requestId?: unknown }).requestId;
 		if (typeof requestId !== "string") return;
@@ -271,7 +271,7 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 		pendingCancels.add(requestId);
 	});
 
-	subscribe(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, async (data) => {
+	subscribe(PROMPT_TEMPLATE_TEAM_REQUEST_EVENT, async (data) => {
 		const request = parsePromptTemplateRequest(data);
 		if (!request) return;
 
@@ -281,9 +281,9 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 				...request,
 				messages: [],
 				isError: true,
-				errorText: "No active extension context for delegated subagent execution.",
+				errorText: "No active extension context for delegated team execution.",
 			};
-			options.events.emit(PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT, response);
+			options.events.emit(PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT, response);
 			return;
 		}
 
@@ -298,12 +298,12 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 				isError: true,
 				errorText: "Delegated prompt cancelled.",
 			};
-			options.events.emit(PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT, response);
+			options.events.emit(PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT, response);
 			controllers.delete(request.requestId);
 			return;
 		}
 
-		options.events.emit(PROMPT_TEMPLATE_SUBAGENT_STARTED_EVENT, { requestId: request.requestId });
+		options.events.emit(PROMPT_TEMPLATE_TEAM_STARTED_EVENT, { requestId: request.requestId });
 
 		try {
 			const result = await options.execute(
@@ -314,7 +314,7 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 				(update) => {
 					const payload = toDelegationUpdate(request.requestId, update);
 					if (!payload) return;
-					options.events.emit(PROMPT_TEMPLATE_SUBAGENT_UPDATE_EVENT, payload);
+					options.events.emit(PROMPT_TEMPLATE_TEAM_UPDATE_EVENT, payload);
 				},
 			);
 			const messages = result.details?.results?.[0]?.messages ?? [];
@@ -346,7 +346,7 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 				isError: result.isError === true,
 				errorText: result.isError ? firstTextContent(result.content) : undefined,
 			};
-			options.events.emit(PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT, response);
+			options.events.emit(PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT, response);
 		} catch (error) {
 			const response: PromptTemplateDelegationResponse = {
 				...request,
@@ -354,7 +354,7 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 				isError: true,
 				errorText: error instanceof Error ? error.message : String(error),
 			};
-			options.events.emit(PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT, response);
+			options.events.emit(PROMPT_TEMPLATE_TEAM_RESPONSE_EVENT, response);
 		} finally {
 			controllers.delete(request.requestId);
 		}

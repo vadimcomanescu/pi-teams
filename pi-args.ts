@@ -91,7 +91,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 
 	let tempDir: string | undefined;
 	if (input.systemPrompt) {
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-team-"));
 		const stem = (input.promptFileStem ?? "prompt").replace(/[^\w.-]/g, "_");
 		const promptPath = path.join(tempDir, `${stem}.md`);
 		fs.writeFileSync(promptPath, input.systemPrompt, { mode: 0o600 });
@@ -102,7 +102,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	if (!input.skipTaskArg) {
 		if (input.task.length > TASK_ARG_LIMIT) {
 			if (!tempDir) {
-				tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+				tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-team-"));
 			}
 			const taskFilePath = path.join(tempDir, "task.md");
 			fs.writeFileSync(taskFilePath, `Task: ${input.task}`, { mode: 0o600 });

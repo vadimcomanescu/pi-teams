@@ -1,5 +1,5 @@
 /**
- * Type definitions for the subagent extension
+ * Type definitions for the team extension
  */
 
 import * as os from "node:os";
@@ -182,7 +182,7 @@ export interface AsyncJobState {
 	sessionFile?: string;
 }
 
-export interface SubagentState {
+export interface TeamState {
 	baseCwd: string;
 	currentSessionId: string | null;
 	asyncJobs: Map<string, AsyncJobState>;
@@ -241,6 +241,7 @@ export interface RunSyncOptions {
 	modelOverride?: string;
 	/** Skills to inject (overrides agent default if provided) */
 	skills?: string[];
+	extraEnv?: Record<string, string>;
 }
 
 export interface ExtensionConfig {
@@ -268,21 +269,21 @@ export const DEFAULT_ARTIFACT_CONFIG: ArtifactConfig = {
 
 export const MAX_PARALLEL = 8;
 export const MAX_CONCURRENCY = 4;
-export const RESULTS_DIR = path.join(os.tmpdir(), "pi-async-subagent-results");
-export const ASYNC_DIR = path.join(os.tmpdir(), "pi-async-subagent-runs");
-export const WIDGET_KEY = "subagent-async";
-export const SLASH_RESULT_TYPE = "subagent-slash-result";
-export const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
-export const SLASH_SUBAGENT_STARTED_EVENT = "subagent:slash:started";
-export const SLASH_SUBAGENT_RESPONSE_EVENT = "subagent:slash:response";
-export const SLASH_SUBAGENT_UPDATE_EVENT = "subagent:slash:update";
-export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
+export const RESULTS_DIR = path.join(os.tmpdir(), "pi-async-team-results");
+export const ASYNC_DIR = path.join(os.tmpdir(), "pi-async-team-runs");
+export const WIDGET_KEY = "team-async";
+export const SLASH_RESULT_TYPE = "team-slash-result";
+export const SLASH_TEAM_REQUEST_EVENT = "team:slash:request";
+export const SLASH_TEAM_STARTED_EVENT = "team:slash:started";
+export const SLASH_TEAM_RESPONSE_EVENT = "team:slash:response";
+export const SLASH_TEAM_UPDATE_EVENT = "team:slash:update";
+export const SLASH_TEAM_CANCEL_EVENT = "team:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
-export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
+export const DEFAULT_TEAM_MAX_DEPTH = 2;
 
 export const DEFAULT_FORK_PREAMBLE =
-	"You are a delegated subagent with access to the parent session's context for reference. " +
+	"You are a delegated worker with access to the parent session's context for reference. " +
 	"Your sole job is to execute the task below. Do not continue or respond to the prior conversation " +
 	"— focus exclusively on completing this task using your tools.";
 
@@ -298,19 +299,19 @@ export function wrapForkTask(task: string, preamble?: string | false): string {
 // Recursion Depth Guard
 // ============================================================================
 
-export function checkSubagentDepth(): { blocked: boolean; depth: number; maxDepth: number } {
-	const depth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
-	const maxDepth = Number(process.env.PI_SUBAGENT_MAX_DEPTH ?? String(DEFAULT_SUBAGENT_MAX_DEPTH));
+export function checkTeamDepth(): { blocked: boolean; depth: number; maxDepth: number } {
+	const depth = Number(process.env.PI_TEAM_DEPTH ?? "0");
+	const maxDepth = Number(process.env.PI_TEAM_MAX_DEPTH ?? String(DEFAULT_TEAM_MAX_DEPTH));
 	const blocked = Number.isFinite(depth) && Number.isFinite(maxDepth) && depth >= maxDepth;
 	return { blocked, depth, maxDepth };
 }
 
-export function getSubagentDepthEnv(): Record<string, string> {
-	const parentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
+export function getTeamDepthEnv(): Record<string, string> {
+	const parentDepth = Number(process.env.PI_TEAM_DEPTH ?? "0");
 	const nextDepth = Number.isFinite(parentDepth) ? parentDepth + 1 : 1;
 	return {
-		PI_SUBAGENT_DEPTH: String(nextDepth),
-		PI_SUBAGENT_MAX_DEPTH: process.env.PI_SUBAGENT_MAX_DEPTH ?? String(DEFAULT_SUBAGENT_MAX_DEPTH),
+		PI_TEAM_DEPTH: String(nextDepth),
+		PI_TEAM_MAX_DEPTH: process.env.PI_TEAM_MAX_DEPTH ?? String(DEFAULT_TEAM_MAX_DEPTH),
 	};
 }
 

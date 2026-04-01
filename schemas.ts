@@ -1,5 +1,5 @@
 /**
- * TypeBox schemas for subagent tool parameters
+ * TypeBox schemas for team tool parameters
  */
 
 import { Type } from "@sinclair/typebox";
@@ -52,7 +52,7 @@ export const ParallelStepSchema = Type.Object({
 // Note: Using Type.Any() for Google API compatibility (doesn't support anyOf)
 export const ChainItem = Type.Any({ description: "Chain step: either {agent, task?, ...} for sequential or {parallel: [...]} for concurrent execution" });
 
-export const SubagentParams = Type.Object({
+export const TeamParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode) or target for management get/update/delete" })),
 	task: Type.Optional(Type.String({ description: "Task (SINGLE mode)" })),
 	name: Type.Optional(Type.String({ description: "Name for the spawned agent. Makes it addressable via send_message while running." })),
