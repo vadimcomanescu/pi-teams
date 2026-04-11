@@ -8,6 +8,7 @@ import type { TeamParamsLike } from "./team-executor.js";
 import { isCoordinatorMode } from "./coordinator.js";
 import type { AgentRegistry } from "./agent-registry.js";
 import { describeTeammateLifecycle } from "./teammate-lifecycle.js";
+import { getAgentDisplayName } from "./agent-display-name.js";
 import { AGENTS_MANAGER_SHORTCUT_KEY } from "./shortcut-contract.js";
 import type { SlashTeamResponse, SlashTeamUpdate } from "./slash-bridge.js";
 import type { TaskStore, TeamTask } from "./task-store.js";
@@ -594,7 +595,8 @@ export function registerSlashCommands(
 				return;
 			}
 			const lines = running.map((a) => {
-				const name = a.name ? `${a.name} (${a.id})` : a.id;
+				const label = getAgentDisplayName({ id: a.id, name: a.name, agent: a.agentType });
+				const name = `${label} (${a.id})`;
 				const duration = a.status === "running"
 					? ` ${Math.round((Date.now() - a.startTime) / 1000)}s`
 					: "";

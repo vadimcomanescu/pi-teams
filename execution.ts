@@ -164,6 +164,7 @@ export async function runSync(
 		let processClosed = false;
 		let forcedExitCode: number | undefined;
 		let forcedError: string | undefined;
+		let exitAfterFinalTriggered = false;
 
 		const failFast = (error: string, exitCode: number = 1) => {
 			if (forcedExitCode !== undefined) return;
@@ -249,6 +250,22 @@ export async function runSync(
 							progress.recentOutput.push(...lines);
 							if (progress.recentOutput.length > 50) {
 								progress.recentOutput.splice(0, progress.recentOutput.length - 50);
+							}
+						}
+
+						if (isRpc && options.exitAfterFinalAssistantMessage && !exitAfterFinalTriggered) {
+							const stopReason = (evt.message as { stopReason?: string }).stopReason;
+							if (stopReason === "stop" || stopReason === "error") {
+								exitAfterFinalTriggered = true;
+								try {
+									proc.stdin?.write(JSON.stringify({ type: "abort" }) + "\n");
+									proc.stdin?.end();
+								} catch {
+									// Best effort. If abort write fails, let close/timeout handling continue.
+								}
+								setTimeout(() => {
+									if (!proc.killed) proc.kill("SIGTERM");
+								}, 2000);
 							}
 						}
 					}

@@ -328,6 +328,7 @@ function spawnCoordinatorWorker(
 		signal,
 		runId,
 		spawnMode: "rpc",
+		exitAfterFinalAssistantMessage: params.runtimeRole === "teammate",
 		sessionDir,
 		sessionFile,
 		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,

@@ -118,17 +118,18 @@ describe("buildMarkdownNotification", () => {
 		assert.ok(md.includes("Found the issue"));
 	});
 
-	it("shows failed status", () => {
+	it("shows failed status and uses explicit teammate name over generic worker label", () => {
 		const md = buildMarkdownNotification({
 			id: "a1",
 			agent: "worker",
+			name: "chaos-goblin",
 			success: false,
 			summary: "Build error",
 			exitCode: 1,
 			timestamp: Date.now(),
 		});
 
-		assert.ok(md.includes("Background task failed: **worker**"));
+		assert.ok(md.includes("Background task failed: **chaos-goblin**"));
 	});
 
 	it("includes task index when present", () => {
@@ -158,6 +159,20 @@ describe("buildMarkdownNotification", () => {
 		});
 
 		assert.ok(md.includes("Session: https://gist.github.com/abc"));
+	});
+
+	it("uses fun deterministic alias for generic worker when name is missing", () => {
+		const md = buildMarkdownNotification({
+			id: "task-42",
+			agent: "worker",
+			success: true,
+			summary: "done",
+			exitCode: 0,
+			timestamp: Date.now(),
+		});
+
+		assert.ok(md.includes("Background task completed: **"));
+		assert.ok(!md.includes("**worker**"));
 	});
 
 	it("uses 'unknown' when agent is null", () => {

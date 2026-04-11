@@ -190,6 +190,7 @@ const HARD_PROVIDER_LIMIT_PATTERNS = [
 	/out of credits?/i,
 	/credits? (?:have been )?exhausted/i,
 	/insufficient credits?/i,
+	/out of extra usage/i,
 	/payment required/i,
 	/billing (?:hard )?limit/i,
 ];

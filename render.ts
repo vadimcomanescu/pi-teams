@@ -13,6 +13,7 @@ import {
 } from "./types.js";
 import { formatTokens, formatUsage, formatDuration, formatToolCall, shortenPath } from "./formatters.js";
 import { getFinalOutput, getDisplayItems, getOutputTail, getLastActivity } from "./utils.js";
+import { getAgentDisplayName } from "./agent-display-name.js";
 
 type Theme = ExtensionContext["ui"]["theme"];
 
@@ -86,13 +87,14 @@ function truncLine(text: string, maxWidth: number): string {
 
 // Track last rendered widget state to avoid no-op re-renders
 let lastWidgetHash = "";
+let lastWidgetContent = "";
 
 /**
  * Compute a simple hash of job states for change detection
  */
 function computeWidgetHash(jobs: AsyncJobState[]): string {
 	return jobs.slice(0, MAX_WIDGET_JOBS).map(job =>
-		`${job.asyncId}:${job.status}:${job.currentStep}:${job.updatedAt}:${job.totalTokens?.total ?? 0}`
+		`${job.asyncId}:${job.name ?? ""}:${job.status}:${job.currentStep}:${job.updatedAt}:${job.totalTokens?.total ?? 0}`
 	).join("|");
 }
 
@@ -117,22 +119,21 @@ function hasEmptyTextOutputWithoutOutputTarget(task: string, output: string): bo
 export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void {
 	if (!ctx.hasUI) return;
 	if (jobs.length === 0) {
-		if (lastWidgetHash !== "") {
+		if (lastWidgetHash !== "" || lastWidgetContent !== "") {
 			lastWidgetHash = "";
+			lastWidgetContent = "";
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
 		}
 		return;
 	}
 
 	// Check if anything changed since last render
-	// Always re-render if any displayed job is running (output tail updates constantly)
 	const displayedJobs = jobs.slice(0, MAX_WIDGET_JOBS);
 	const hasRunningJobs = displayedJobs.some(job => job.status === "running");
 	const newHash = computeWidgetHash(jobs);
 	if (!hasRunningJobs && newHash === lastWidgetHash) {
 		return; // Skip re-render, nothing changed
 	}
-	lastWidgetHash = newHash;
 
 	const theme = ctx.ui.theme;
 	const w = getTermWidth();
@@ -159,7 +160,14 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 			? (job.updatedAt ?? Date.now())
 			: Date.now();
 		const elapsed = job.startedAt ? formatDuration(endTime - job.startedAt) : "";
-		const agentLabel = job.agents ? job.agents.join(" -> ") : (job.mode ?? "single");
+		const agentLabel = job.name?.trim()
+			? job.name
+			: job.agents && job.agents.length > 0
+				? job.agents.map((agent, idx) => getAgentDisplayName({
+					id: job.agents!.length === 1 ? job.asyncId : `${job.asyncId}-${idx}`,
+					agent,
+				})).join(" -> ")
+				: (job.mode ?? "single");
 
 		const tokenText = job.totalTokens ? ` | ${formatTokens(job.totalTokens.total)} tok` : "";
 		const activityText = job.status === "running" ? getLastActivity(job.outputFile) : "";
@@ -175,6 +183,12 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		}
 	}
 
+	const content = lines.join("\n");
+	if (content === lastWidgetContent) {
+		return;
+	}
+	lastWidgetHash = newHash;
+	lastWidgetContent = content;
 	ctx.ui.setWidget(WIDGET_KEY, lines);
 }
 

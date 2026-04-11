@@ -53,4 +53,13 @@ describe("createAsyncJobTracker", { skip: !available ? "async-job-tracker.ts not
 
 		assert.equal(state.asyncJobs.get("job-1")?.status, "timed_out");
 	});
+
+	it("stores teammate display name from started events", () => {
+		const state = makeState();
+		const tracker = createAsyncJobTracker!(state, "/tmp/async");
+
+		tracker.handleStarted({ id: "job-1", agent: "worker", name: "chaos-goblin" });
+
+		assert.equal(state.asyncJobs.get("job-1")?.name, "chaos-goblin");
+	});
 });

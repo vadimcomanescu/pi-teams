@@ -229,6 +229,12 @@ export interface RunSyncOptions {
 	 * allows registering the rpcHandle before blocking on completion. */
 	onSpawn?: (proc: import("node:child_process").ChildProcess) => void;
 	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
+	/**
+	 * RPC mode only. When true, sends an abort command after the first final
+	 * assistant response (stopReason: stop|error) so one-shot teammate runs
+	 * complete promptly instead of staying open for follow-ups.
+	 */
+	exitAfterFinalAssistantMessage?: boolean;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig?: ArtifactConfig;

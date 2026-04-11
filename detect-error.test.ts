@@ -70,6 +70,14 @@ describe("detectFatalProviderError", { skip: !available ? "utils not importable"
 		assert.equal(result.errorType, "provider");
 	});
 
+	it("detects Anthropic out-of-extra-usage failures as fatal", () => {
+		const result = detectFatalProviderError(
+			"400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You're out of extra usage. Add more at claude.ai/settings/usage and keep going.\"}}",
+		);
+		assert.equal(result.hasError, true);
+		assert.equal(result.errorType, "provider");
+	});
+
 	it("does not flag generic provider hiccups as fatal", () => {
 		const result = detectFatalProviderError("503 overloaded, retrying shortly");
 		assert.equal(result.hasError, false);

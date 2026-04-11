@@ -37,7 +37,7 @@ export function createAsyncJobTracker(state: TeamState, asyncDirRoot: string): {
 					job.currentStep = status.currentStep ?? job.currentStep;
 					job.stepsTotal = status.steps?.length ?? job.stepsTotal;
 					job.startedAt = status.startedAt ?? job.startedAt;
-					job.updatedAt = status.lastUpdate ?? Date.now();
+					job.updatedAt = status.lastUpdate ?? job.updatedAt ?? Date.now();
 					if (status.steps?.length) {
 						job.agents = status.steps.map((step) => step.agent);
 					}
@@ -45,8 +45,8 @@ export function createAsyncJobTracker(state: TeamState, asyncDirRoot: string): {
 					job.outputFile = status.outputFile ?? job.outputFile;
 					job.totalTokens = status.totalTokens ?? job.totalTokens;
 					job.sessionFile = status.sessionFile ?? job.sessionFile;
-				} else {
-					job.status = job.status === "queued" ? "running" : job.status;
+				} else if (job.status === "queued") {
+					job.status = "running";
 					job.updatedAt = Date.now();
 				}
 			}
@@ -61,6 +61,7 @@ export function createAsyncJobTracker(state: TeamState, asyncDirRoot: string): {
 			id?: string;
 			asyncDir?: string;
 			agent?: string;
+			name?: string;
 			chain?: string[];
 		};
 		if (!info.id) return;
@@ -70,6 +71,7 @@ export function createAsyncJobTracker(state: TeamState, asyncDirRoot: string): {
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
 			asyncDir,
+			name: info.name,
 			status: "queued",
 			mode: info.chain ? "chain" : "single",
 			agents,

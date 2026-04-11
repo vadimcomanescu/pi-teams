@@ -13,9 +13,8 @@ const execution = await tryImport<any>("./execution.ts");
 const available = !!execution;
 const runSync = execution?.runSync;
 
-function installFatalProviderPiShim(tempDir: string): () => void {
+function installFatalProviderPiShim(tempDir: string, errorMessage: string): () => void {
 	const scriptPath = path.join(tempDir, "fatal-provider-pi.mjs");
-	const errorMessage = "429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"}}";
 	fs.writeFileSync(
 		scriptPath,
 		`console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [], api: "anthropic-messages", provider: "anthropic", model: "claude-haiku-4-5", stopReason: "error", errorMessage: ${JSON.stringify(errorMessage)} } }));\nsetTimeout(() => process.exit(0), 10000);\n`,
@@ -52,7 +51,10 @@ describe("provider hard-limit fail-fast", { skip: !available ? "execution.ts not
 
 	it("fails fast instead of waiting for worker timeout on hard provider limits", async () => {
 		tempDir = createTempDir("pi-team-provider-limit-");
-		restoreShim = installFatalProviderPiShim(tempDir);
+		restoreShim = installFatalProviderPiShim(
+			tempDir,
+			"429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"}}",
+		);
 		const agents = makeAgentConfigs(["worker"]);
 
 		const startedAt = Date.now();
@@ -62,6 +64,24 @@ describe("provider hard-limit fail-fast", { skip: !available ? "execution.ts not
 		assert.equal(result.exitCode, 1);
 		assert.match(result.error ?? "", /Provider hard limit/i);
 		assert.match(result.error ?? "", /rate limit/i);
+		assert.ok(durationMs < 5_000, `expected fail-fast within 5s, got ${durationMs}ms`);
+	});
+
+	it("fails fast on Anthropic out-of-extra-usage billing errors", async () => {
+		tempDir = createTempDir("pi-team-provider-limit-anthropic-");
+		restoreShim = installFatalProviderPiShim(
+			tempDir,
+			"400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You're out of extra usage. Add more at claude.ai/settings/usage and keep going.\"},\"request_id\":\"req_test\"}",
+		);
+		const agents = makeAgentConfigs(["worker"]);
+
+		const startedAt = Date.now();
+		const result = await runSync(tempDir, agents, "worker", "Inspect the repo", {});
+		const durationMs = Date.now() - startedAt;
+
+		assert.equal(result.exitCode, 1);
+		assert.match(result.error ?? "", /Provider hard limit/i);
+		assert.match(result.error ?? "", /out of extra usage/i);
 		assert.ok(durationMs < 5_000, `expected fail-fast within 5s, got ${durationMs}ms`);
 	});
 });

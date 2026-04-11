@@ -23,6 +23,25 @@ To remove:
 npx @vadimcomanescu/pi-teams --remove
 ```
 
+## Maintainer release workflow
+
+Releases are now guard-railed so npm publish cannot happen without first pushing git commits and a matching tag.
+
+```bash
+npm run release:publish
+```
+
+What this does, in order:
+1. Fails if the working tree is dirty.
+2. Fails unless you are on `main`.
+3. Fails if `HEAD` is behind `origin/main`.
+4. Validates `package.json` version and matching `CHANGELOG.md` entry.
+5. Pushes `HEAD` to `origin/main`.
+6. Creates and pushes tag `v<package-version>`.
+7. Runs `npm publish`.
+
+Direct `npm publish` is blocked by `prepublishOnly` unless `PI_TEAMS_RELEASE_SCRIPT=1` is explicitly set.
+
 ## Team-first workflow
 
 Lead sessions use the coordinator prompt by default. Start with the first-class team and task tools. Use the low-level `team` worker tool only when you intentionally want raw worker control.

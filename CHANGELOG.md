@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Added
+- Enforced release guardrails: direct `npm publish` now fails by default, and maintainers publish through `npm run release:publish` which pushes `origin/main` and `v<version>` tag before publishing.
+- Added release guard test coverage to prevent regressions in the publish gate.
+
+## [1.0.5] - 2026-04-10
+
+### Fixed
+- Reduced async widget flicker by suppressing no-op widget renders and stabilizing async job timestamp updates when no new status arrives.
+- Teammate worker runs now auto-exit after their first final assistant response, so simple teammate tasks complete promptly instead of appearing permanently `running` until manual shutdown.
+
+### Added
+- New integration test covering RPC one-shot teammate auto-exit behavior after a final assistant response.
+
+## [1.0.4] - 2026-04-10
+
+### Changed
+- Async worker surfaces now use friendlier teammate labels: explicit teammate names are preferred everywhere, and generic `worker` labels fall back to deterministic fun aliases.
+- `/workers` output now uses the same friendly display names for unnamed generic workers.
+
+### Added
+- New deterministic fun-name helper for worker display labels.
+- Unit coverage for display-name behavior and async tracker name propagation.
+
+## [1.0.3] - 2026-04-10
+
+### Fixed
+- Added Anthropic billing exhaustion detection for fail-fast provider handling (`"You're out of extra usage"`), so broken workers fail quickly instead of appearing stuck in `running`.
+
+### Added
+- New integration coverage proving fail-fast behavior for Anthropic `out of extra usage` errors.
+- New unit coverage for Anthropic `out of extra usage` fatal-provider detection.
+
 ## [1.0.2] - 2026-04-01
 
 ### Changed

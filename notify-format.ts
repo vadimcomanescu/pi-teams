@@ -3,6 +3,8 @@
  * No dependencies — safe to import from tests and from notify.ts.
  */
 
+import { getAgentDisplayName } from "./agent-display-name.js";
+
 export interface NotificationData {
 	id: string | null;
 	agent: string | null;
@@ -34,7 +36,7 @@ function resolveStatus(result: NotificationData): "completed" | "failed" | "stop
  */
 export function buildCoordinatorXml(result: NotificationData): string {
 	const status = resolveStatus(result);
-	const name = result.name ?? result.agent ?? "unknown";
+	const name = getAgentDisplayName({ id: result.id, agent: result.agent, name: result.name });
 
 	const parts: string[] = ["<task-notification>"];
 	if (result.id) parts.push(`<task-id>${result.id}</task-id>`);
@@ -64,7 +66,7 @@ export function buildCoordinatorXml(result: NotificationData): string {
  * Default markdown format for human-readable notifications.
  */
 export function buildMarkdownNotification(result: NotificationData): string {
-	const agent = result.agent ?? result.name ?? "unknown";
+	const agent = getAgentDisplayName({ id: result.id, agent: result.agent, name: result.name });
 	const status = resolveStatus(result);
 
 	const taskInfo =
