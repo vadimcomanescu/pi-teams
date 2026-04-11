@@ -18,6 +18,7 @@ export interface TeamMember {
 	status: AgentStatus;
 	cwd: string;
 	lastSummary?: string;
+	pendingShutdownRequestId?: string;
 	updatedAt: number;
 }
 
@@ -54,6 +55,15 @@ export interface SessionCleanupResult {
 	teamNames: string[];
 	cleanedTeams: string[];
 	failures: Array<{ teamName: string; step: "stop" | "delete"; message: string }>;
+}
+
+export interface ShutdownResponseOutcome {
+	approved: boolean;
+	team: Team;
+	member: TeamMember;
+	summary: string;
+	reason?: string;
+	unassigned: UnassignTasksForOwnerResult;
 }
 
 export type TaskMutationActor =
@@ -400,6 +410,7 @@ export class TeamManager {
 				...member,
 				updatedAt: this.now(),
 				lastSummary: existingIndex !== -1 ? team.members[existingIndex]?.lastSummary : member.lastSummary,
+				pendingShutdownRequestId: undefined,
 			};
 			if (existingIndex !== -1) {
 				team.members[existingIndex] = persisted;
@@ -444,13 +455,13 @@ export class TeamManager {
 			throw new Error(`Teammate not found in team "${resolvedTeamName}": ${agentName}`);
 		}
 		const live = this.resolveLiveTeammate(member);
-		const resolvedStatus = live?.status ?? member.status;
+		const resolvedStatus = member.status !== "running" ? member.status : (live?.status ?? member.status);
 		return {
 			teamName: team.name,
 			effectiveModel: member.model ?? team.defaultModel,
 			status: resolvedStatus,
 			lastSummary: live?.result ?? member.lastSummary,
-			member: live ? { ...member, agentId: live.id, status: live.status } : member,
+			member: live ? { ...member, agentId: live.id, status: resolvedStatus } : member,
 			state: team.state,
 			sessionFile: live?.sessionFile,
 			lifecycle: describeTeammateLifecycle({
@@ -485,6 +496,7 @@ export class TeamManager {
 				}
 				member.status = status;
 				member.updatedAt = this.now();
+				member.pendingShutdownRequestId = undefined;
 				if (lastSummary !== undefined) {
 					member.lastSummary = lastSummary;
 				}
@@ -494,6 +506,134 @@ export class TeamManager {
 				this.writeTeam(team);
 				return;
 			}
+		});
+	}
+
+	recordShutdownRequest(agentId: string, requestId: string, summary?: string): void {
+		this.withRootLock(() => {
+			for (const team of this.listTeams()) {
+				const member = team.members.find((entry) => entry.agentId === agentId);
+				if (!member) continue;
+				member.pendingShutdownRequestId = requestId;
+				member.lastSummary = summary?.trim()
+					? `Graceful shutdown requested: ${summary.trim()}`
+					: "Graceful shutdown requested by lead";
+				member.updatedAt = this.now();
+				this.writeTeam(team);
+				return;
+			}
+			throw new Error(`Teammate not found for shutdown request: ${agentId}`);
+		});
+	}
+
+	clearPendingShutdownRequest(agentId: string, requestId?: string): void {
+		this.withRootLock(() => {
+			for (const team of this.listTeams()) {
+				const member = team.members.find((entry) => entry.agentId === agentId);
+				if (!member) continue;
+				if (requestId && member.pendingShutdownRequestId !== requestId) {
+					return;
+				}
+				member.pendingShutdownRequestId = undefined;
+				member.updatedAt = this.now();
+				this.writeTeam(team);
+				return;
+			}
+		});
+	}
+
+	validateCurrentTeammateShutdownRequest(requestId: string): void {
+		this.withRootLock(() => {
+			const teamName = this.options.getCurrentTeammateTeamName?.();
+			const teammateName = this.options.getCurrentTeammateName?.();
+			if (!teamName || !teammateName) {
+				throw new Error("shutdown_response is only available inside a teammate runtime.");
+			}
+			const team = this.getTeam(teamName);
+			if (!team) {
+				throw new Error(`Team not found: ${teamName}`);
+			}
+			if (team.state !== "active") {
+				throw new Error(`Team "${team.name}" is not active.`);
+			}
+			const memberIndex = this.findMemberIndexByName(team, teammateName);
+			if (memberIndex === -1) {
+				throw new Error(`Teammate not found in team "${team.name}": ${teammateName}`);
+			}
+			const member = team.members[memberIndex]!;
+			if (member.pendingShutdownRequestId !== requestId) {
+				throw new Error(`Unknown shutdown request for teammate "${member.name}": ${requestId}`);
+			}
+		});
+	}
+
+	handleShutdownResponseForAgent(agentId: string, input: {
+		requestId: string;
+		approve: boolean;
+		reason?: string;
+		summary?: string;
+	}): ShutdownResponseOutcome {
+		return this.withRootLock(() => {
+			for (const team of this.listTeams()) {
+				const member = team.members.find((entry) => entry.agentId === agentId);
+				if (!member) continue;
+				if (team.state !== "active") {
+					throw new Error(`Team "${team.name}" is not active.`);
+				}
+				if (member.pendingShutdownRequestId !== input.requestId) {
+					throw new Error(`Unknown shutdown request for teammate "${member.name}": ${input.requestId}`);
+				}
+				member.pendingShutdownRequestId = undefined;
+				member.updatedAt = this.now();
+				if (!input.approve) {
+					const reason = input.reason?.trim();
+					if (!reason) {
+						throw new Error("Rejected shutdown responses require a non-empty reason.");
+					}
+					member.lastSummary = `Graceful shutdown rejected: ${reason}`;
+					this.writeTeam(team);
+					return {
+						approved: false,
+						team,
+						member: { ...member },
+						summary: member.lastSummary,
+						reason,
+						unassigned: { unassignedTasks: [] },
+					};
+				}
+				const unassigned = this.unassignTasksForMember(team.name, member);
+				member.status = "stopped";
+				member.lastSummary = input.summary?.trim() || "Graceful shutdown approved";
+				this.writeTeam(team);
+				return {
+					approved: true,
+					team,
+					member: { ...member },
+					summary: member.lastSummary,
+					unassigned,
+				};
+			}
+			throw new Error(`Teammate not found for shutdown response: ${agentId}`);
+		});
+	}
+
+	resolveTeammateCompletion(agentId: string, fallbackStatus: AgentStatus, fallbackSummary?: string): {
+		status: AgentStatus;
+		summary?: string;
+	} {
+		return this.withRootLock(() => {
+			for (const team of this.listTeams()) {
+				const member = team.members.find((entry) => entry.agentId === agentId);
+				if (!member) continue;
+				if (member.status === "running") {
+					return { status: fallbackStatus, summary: fallbackSummary };
+				}
+				return {
+					status: member.status,
+					summary: member.lastSummary ?? fallbackSummary,
+				};
+			}
+			return { status: fallbackStatus, summary: fallbackSummary };
 		});
 	}
 
@@ -512,11 +652,13 @@ export class TeamManager {
 				if (live?.status === "running") {
 					this.options.registry.stopAgent(member.agentId);
 					member.status = "stopped";
+					member.pendingShutdownRequestId = undefined;
 					member.lastSummary = member.lastSummary ?? reason;
 					member.updatedAt = this.now();
 					this.onMemberStopped?.(member, team, reason, unassigned);
 					continue;
 				}
+				member.pendingShutdownRequestId = undefined;
 				if (unassigned.unassignedTasks.length > 0) {
 					member.lastSummary = member.lastSummary ?? reason;
 					member.updatedAt = this.now();
@@ -595,6 +737,7 @@ export class TeamManager {
 					try {
 						this.options.registry.stopAgent(member.agentId);
 						member.status = "stopped";
+						member.pendingShutdownRequestId = undefined;
 						member.lastSummary = member.lastSummary ?? reason;
 						member.updatedAt = this.now();
 						const unassigned = this.unassignTasksForMember(team.name, member);

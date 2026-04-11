@@ -285,6 +285,36 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 		expandTilde,
 		discoverAgents,
 		registry,
+		onTeammateControlMessage: (payload) => {
+			if (payload.message.type !== "shutdown_response") return;
+			try {
+				const outcome = teamManager.handleShutdownResponseForAgent(payload.agentId, {
+					requestId: payload.message.requestId,
+					approve: payload.message.approve,
+					reason: payload.message.reason,
+				});
+				if (outcome.approved) {
+					registry.stopAgent(payload.agentId);
+					emitTeamCompletion({
+						id: payload.agentId,
+						agent: payload.agentType,
+						name: payload.name,
+						status: "stopped",
+						summary: appendUnassignedTaskSummary(outcome.summary, outcome.unassigned),
+					});
+					return;
+				}
+				pi.sendMessage(
+					{ customType: "team-notify", content: `Graceful shutdown rejected by "${outcome.member.name}": ${outcome.reason}`, display: true },
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+			} catch (error) {
+				pi.sendMessage(
+					{ customType: "team-notify", content: `Invalid shutdown response from "${payload.name ?? payload.agentId}": ${error instanceof Error ? error.message : String(error)}`, display: true },
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+			}
+		},
 	});
 
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
@@ -502,14 +532,21 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 	pi.registerTool(createTaskReadTool({ teamManager, createTaskStore }));
 	pi.registerTool(createTaskUpdateTool({ teamManager, createTaskStore }));
 
-	if (isLeadRuntime) {
+	if (isLeadRuntime || runtimeRole === "teammate") {
 		pi.registerTool(createSendMessageTool(registry, {
-			resumeAgent: createResumeAgent({
-				execute: executor.execute,
-				teamManager,
-				getFallbackCwd: () => state.baseCwd,
-			}),
+			resumeAgent: isLeadRuntime
+				? createResumeAgent({
+					execute: executor.execute,
+					teamManager,
+					getFallbackCwd: () => state.baseCwd,
+				})
+				: undefined,
+			teamManager,
+			runtimeRole,
 		}));
+	}
+
+	if (isLeadRuntime) {
 		pi.registerTool(createTaskStopTool(registry, (agent) => {
 			const unassigned = teamManager.unassignOpenTasksForAgent(agent.id);
 			emitTeamCompletion({
@@ -587,11 +624,14 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 	const handleAgentCompleteEvent = (data: unknown) => {
 		const d = data as { id?: string; success?: boolean; summary?: string; status?: "completed" | "failed" | "stopped" | "timed_out" };
 		if (!d.id) return;
-		const status = d.status ?? (d.success === false ? "failed" : "completed");
+		const reportedStatus = d.status ?? (d.success === false ? "failed" : "completed");
+		const resolved = teamManager.resolveTeammateCompletion(d.id, reportedStatus, d.summary);
+		const status = resolved.status;
+		const summary = resolved.summary;
 		if (!lifecycleDedupe.shouldProcess(`complete:${d.id}:${status}`)) return;
-		handleComplete({ ...d, success: status === "completed" });
-		registry.updateStatus(d.id, status, d.summary);
-		teamManager.recordTeammateStatus(d.id, status, d.summary);
+		handleComplete({ ...d, success: status === "completed", status, summary });
+		registry.updateStatus(d.id, status, summary);
+		teamManager.recordTeammateStatus(d.id, status, summary);
 	};
 	pi.events.on("team:started", handleAgentStartedEvent);
 	pi.events.on("team:complete", handleAgentCompleteEvent);

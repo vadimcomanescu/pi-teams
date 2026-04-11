@@ -165,6 +165,7 @@ export async function runSync(
 		let forcedExitCode: number | undefined;
 		let forcedError: string | undefined;
 		let exitAfterFinalTriggered = false;
+		let suppressAutoExitForFinalAssistant = false;
 
 		const failFast = (error: string, exitCode: number = 1) => {
 			if (forcedExitCode !== undefined) return;
@@ -193,9 +194,27 @@ export async function runSync(
 			if (!line.trim()) return;
 			jsonlWriter.writeLine(line);
 			try {
-				const evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown };
+				const evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown } & {
+					message?: Message | { type?: "shutdown_response"; requestId?: string; approve?: boolean; reason?: string };
+				};
 				const now = Date.now();
 				progress.durationMs = now - startTime;
+
+				if (evt.type === "teammate_control_message") {
+					const control = evt.message as { type?: "shutdown_response"; requestId?: string; approve?: boolean; reason?: string };
+					if (control?.type === "shutdown_response" && control.requestId && typeof control.approve === "boolean") {
+						if (control.approve === false) {
+							suppressAutoExitForFinalAssistant = true;
+						}
+						options.onTeammateControlMessage?.({
+							type: "shutdown_response",
+							requestId: control.requestId,
+							approve: control.approve,
+							reason: control.reason,
+						});
+					}
+					return;
+				}
 
 				if (evt.type === "tool_execution_start") {
 					progress.toolCount++;
@@ -253,7 +272,7 @@ export async function runSync(
 							}
 						}
 
-						if (isRpc && options.exitAfterFinalAssistantMessage && !exitAfterFinalTriggered) {
+						if (isRpc && options.exitAfterFinalAssistantMessage && !exitAfterFinalTriggered && !suppressAutoExitForFinalAssistant) {
 							const stopReason = (evt.message as { stopReason?: string }).stopReason;
 							if (stopReason === "stop" || stopReason === "error") {
 								exitAfterFinalTriggered = true;

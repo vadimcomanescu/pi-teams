@@ -40,6 +40,7 @@ import {
 	type MaxOutputConfig,
 	type SingleResult,
 	type TeamState,
+	type TeammateControlMessage,
 	DEFAULT_ARTIFACT_CONFIG,
 	MAX_CONCURRENCY,
 	MAX_PARALLEL,
@@ -94,6 +95,12 @@ interface ExecutorDeps {
 	expandTilde: (p: string) => string;
 	discoverAgents: (cwd: string, scope: AgentScope) => { agents: AgentConfig[] };
 	registry?: AgentRegistry;
+	onTeammateControlMessage?: (payload: {
+		agentId: string;
+		agentType: string;
+		name?: string;
+		message: TeammateControlMessage;
+	}) => void;
 }
 
 interface ExecutionContextData {
@@ -337,6 +344,14 @@ function spawnCoordinatorWorker(
 		modelOverride,
 		skills: effectiveSkills,
 		extraEnv: getWorkerExtraEnv(params),
+		onTeammateControlMessage: params.runtimeRole === "teammate"
+			? (message) => deps.onTeammateControlMessage?.({
+				agentId: workerId,
+				agentType: params.agent!,
+				name: workerName,
+				message,
+			})
+			: undefined,
 		onSpawn: (proc) => {
 			registry.register({
 				id: workerId,

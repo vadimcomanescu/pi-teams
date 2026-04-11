@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+- Claude-style graceful shutdown messaging through `send_message`, with structured `shutdown_request` and `shutdown_response` payloads for teammate approve/reject flows.
+- New protocol coverage for graceful shutdown approval, rejection, and invalid response validation.
+
+### Changed
+- Plain-text `send_message` follow-ups now require a non-empty `summary`.
+- Approved teammate shutdowns now persist `stopped` status and task unassignment before late completion events can regress the recorded state.
+
 ## [1.0.6] - 2026-04-11
 
 ### Added

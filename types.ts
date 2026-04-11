@@ -221,6 +221,13 @@ export interface ErrorInfo {
 // Execution Options
 // ============================================================================
 
+export interface TeammateControlMessage {
+	type: "shutdown_response";
+	requestId: string;
+	approve: boolean;
+	reason?: string;
+}
+
 export interface RunSyncOptions {
 	cwd?: string;
 	signal?: AbortSignal;
@@ -229,6 +236,7 @@ export interface RunSyncOptions {
 	 * allows registering the rpcHandle before blocking on completion. */
 	onSpawn?: (proc: import("node:child_process").ChildProcess) => void;
 	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
+	onTeammateControlMessage?: (message: TeammateControlMessage) => void;
 	/**
 	 * RPC mode only. When true, sends an abort command after the first final
 	 * assistant response (stopReason: stop|error) so one-shot teammate runs

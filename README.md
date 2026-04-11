@@ -70,6 +70,10 @@ Lead sessions use the coordinator prompt by default. Start with the first-class 
 >
 > `team_shutdown` stops teammates and marks the team shutdown. `team_delete` is the final physical cleanup step.
 >
+> Plain-text `send_message` follow-ups now require a non-empty `summary`.
+>
+> Graceful shutdown uses `send_message` structured payloads. The lead sends `message: { type: "shutdown_request" }`, then the teammate replies with `to: "lead"` and `message: { type: "shutdown_response", request_id, approve, reason? }`.
+>
 > `task_update` is shared board state. Leads can edit any task. Teammates can claim and complete their own tasks.
 
 ### User says

@@ -314,7 +314,7 @@ Add tests:
 
 ---
 
-## PR4 - Graceful Shutdown Protocol (Request / Approve / Reject) (P0)
+## PR4 - Graceful Shutdown Protocol (Request / Approve / Reject) (P0) [done]
 
 ### Problem class
 Hard-stop only semantics lose work context and diverge from Claude behavior.

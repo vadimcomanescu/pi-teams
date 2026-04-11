@@ -302,6 +302,39 @@ describe("TeamManager", () => {
 		assert.equal(store.readTask(task.id)?.owner, undefined);
 	});
 
+	it("shutdownTeam clears pending shutdown requests and rejects late responses", () => {
+		teamManager.createTeam({ team_name: "review" });
+		registry.register({
+			id: "worker-1",
+			name: "docs",
+			agentType: "worker",
+			task: "Review docs",
+			status: "running",
+			startTime: Date.now(),
+		});
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			model: undefined,
+			status: "running",
+			cwd: tempDir,
+		});
+		teamManager.recordShutdownRequest("worker-1", "req-1", "wrap up");
+
+		teamManager.shutdownTeam("review", "done");
+
+		assert.equal(teamManager.getTeam("review")?.members[0]?.pendingShutdownRequestId, undefined);
+		assert.throws(
+			() => teamManager.handleShutdownResponseForAgent("worker-1", {
+				requestId: "req-1",
+				approve: false,
+				reason: "too late",
+			}),
+			/not active/i,
+		);
+	});
+
 	it("round-trips persistence including state", () => {
 		teamManager.createTeam({ team_name: "review" });
 		teamManager.shutdownTeam("review", "done");
