@@ -14,6 +14,10 @@ function makeAgent(overrides: Partial<RegisteredAgent> = {}): RegisteredAgent {
 	};
 }
 
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 describe("AgentRegistry", () => {
 	let registry: AgentRegistry;
 
@@ -220,6 +224,41 @@ describe("AgentRegistry", () => {
 			assert.equal(registry.resolve("a1")!.status, "timed_out");
 			assert.equal(registry.resolve("a2")!.status, "running");
 			assert.deepEqual(timedOut, ["a1"]);
+		});
+
+		it("escalates timed-out RPC workers to SIGKILL when they ignore SIGTERM", async () => {
+			const killSignals: string[] = [];
+			const writes: string[] = [];
+			const fakeProc = {
+				killed: false,
+				exitCode: null,
+				signalCode: null,
+				kill(signal?: string) {
+					killSignals.push(signal ?? "SIGTERM");
+					return true;
+				},
+			} as unknown as RegisteredAgent["rpcHandle"]["proc"];
+			const fakeStdin = {
+				write(chunk: string) {
+					writes.push(chunk);
+					return true;
+				},
+			} as unknown as RegisteredAgent["rpcHandle"]["stdin"];
+
+			registry = new AgentRegistry({ abortGraceMs: 10, forceKillGraceMs: 10 });
+			registry.register(makeAgent({
+				id: "zombie",
+				startTime: Date.now() - 10_000,
+				rpcHandle: { stdin: fakeStdin, proc: fakeProc },
+			}));
+
+			registry.startTimeoutSweeper(5_000, 5);
+			await sleep(80);
+			registry.stopTimeoutSweeper();
+
+			assert.equal(registry.resolve("zombie")!.status, "timed_out");
+			assert.ok(writes.some((chunk) => chunk.includes('"abort"')));
+			assert.deepEqual(killSignals, ["SIGTERM", "SIGKILL"]);
 		});
 
 		it("dispose cleans up sweeper", () => {

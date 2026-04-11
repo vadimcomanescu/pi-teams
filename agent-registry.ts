@@ -44,11 +44,26 @@ export type AgentStatus = RegisteredAgent["status"];
 // Registry
 // =============================================================================
 
+interface AgentRegistryOptions {
+	abortGraceMs?: number;
+	forceKillGraceMs?: number;
+	setTimeoutFn?: typeof setTimeout;
+}
+
 export class AgentRegistry {
 	private agents = new Map<string, RegisteredAgent>();
 	private nameIndex = new Map<string, string>(); // lowercase name → id
 	private timeoutSweepInterval: ReturnType<typeof setInterval> | null = null;
 	private onTimeout?: (agent: RegisteredAgent) => void;
+	private readonly abortGraceMs: number;
+	private readonly forceKillGraceMs: number;
+	private readonly setTimeoutFn: typeof setTimeout;
+
+	constructor(options: AgentRegistryOptions = {}) {
+		this.abortGraceMs = options.abortGraceMs ?? 2000;
+		this.forceKillGraceMs = options.forceKillGraceMs ?? 3000;
+		this.setTimeoutFn = options.setTimeoutFn ?? setTimeout;
+	}
 
 	/**
 	 * Register a new agent. Throws if a name is already taken by a running agent.
@@ -163,6 +178,23 @@ export class AgentRegistry {
 		this.agents.delete(id);
 	}
 
+	private isProcessAlive(proc: ChildProcess): boolean {
+		return !proc.killed && proc.exitCode === null && proc.signalCode === null;
+	}
+
+	private scheduleKillEscalation(proc: ChildProcess): void {
+		this.setTimeoutFn(() => {
+			if (this.isProcessAlive(proc)) {
+				proc.kill("SIGTERM");
+			}
+			this.setTimeoutFn(() => {
+				if (this.isProcessAlive(proc)) {
+					proc.kill("SIGKILL");
+				}
+			}, this.forceKillGraceMs);
+		}, this.abortGraceMs);
+	}
+
 	/**
 	 * Send kill signals to a running agent. Does NOT update status —
 	 * the caller decides the final status (stopped, timed_out, etc.).
@@ -177,22 +209,31 @@ export class AgentRegistry {
 			try {
 				agent.rpcHandle.stdin.write(JSON.stringify({ type: "abort" }) + "\n");
 			} catch {
-				// stdin already closed — kill immediately
-				if (!proc.killed) proc.kill("SIGTERM");
-				return;
-			}
-			// Give 2s for graceful shutdown, then SIGTERM
-			setTimeout(() => {
-				if (!proc.killed) {
+				// stdin already closed — escalate immediately
+				if (this.isProcessAlive(proc)) {
 					proc.kill("SIGTERM");
 				}
-			}, 2000);
+				this.setTimeoutFn(() => {
+					if (this.isProcessAlive(proc)) {
+						proc.kill("SIGKILL");
+					}
+				}, this.forceKillGraceMs);
+				return;
+			}
+			this.scheduleKillEscalation(proc);
 		} else if (agent.pid) {
 			try {
 				process.kill(agent.pid, "SIGTERM");
 			} catch {
 				// Process may have already exited
 			}
+			this.setTimeoutFn(() => {
+				try {
+					process.kill(agent.pid!, "SIGKILL");
+				} catch {
+					// Process already exited
+				}
+			}, this.forceKillGraceMs);
 		}
 	}
 
