@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-04-11
+
 ### Added
 - Enforced release guardrails: direct `npm publish` now fails by default, and maintainers publish through `npm run release:publish` which pushes `origin/main` and `v<version>` tag before publishing.
 - Added release guard test coverage to prevent regressions in the publish gate.
+
+### Fixed
+- Hardened timed-out worker termination so stuck workers escalate from `abort` to `SIGTERM` and finally `SIGKILL`.
+- Added regression coverage proving timed-out RPC workers that ignore `SIGTERM` are force-killed.
 
 ## [1.0.5] - 2026-04-10
 
