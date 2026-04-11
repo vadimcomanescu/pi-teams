@@ -15,6 +15,14 @@ export interface TeamTask {
 	version: number;
 }
 
+export interface UnassignTasksForOwnerResult {
+	unassignedTasks: Array<{ id: string; subject: string }>;
+}
+
+export interface UnassignTasksForOwnerOptions {
+	aliases?: string[];
+}
+
 interface TaskFile {
 	schemaVersion: 1;
 	tasks: TeamTask[];
@@ -116,6 +124,37 @@ export class TaskStore {
 			task.version += 1;
 			this.writeFile(file);
 			return { ...task };
+		});
+	}
+
+	unassignTasksForOwner(ownerName: string, options: UnassignTasksForOwnerOptions = {}): UnassignTasksForOwnerResult {
+		return this.withWriteLock(() => {
+			const ownerKeys = new Set(
+				[ownerName, ...(options.aliases ?? [])]
+					.map((value) => value.trim().toLowerCase())
+					.filter(Boolean),
+			);
+			if (ownerKeys.size === 0) {
+				return { unassignedTasks: [] };
+			}
+			const file = this.readFile();
+			const unassignedTasks: Array<{ id: string; subject: string }> = [];
+			let mutated = false;
+			for (const task of file.tasks) {
+				if (task.status !== "pending" && task.status !== "in_progress") continue;
+				const ownerKey = task.owner?.trim().toLowerCase();
+				if (!ownerKey || !ownerKeys.has(ownerKey)) continue;
+				task.owner = undefined;
+				task.status = "pending";
+				task.updatedAt = Date.now();
+				task.version += 1;
+				mutated = true;
+				unassignedTasks.push({ id: task.id, subject: task.subject });
+			}
+			if (mutated) {
+				this.writeFile(file);
+			}
+			return { unassignedTasks };
 		});
 	}
 }

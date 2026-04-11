@@ -25,6 +25,7 @@ describe("public team-first contract", () => {
 			"task_list",
 			"check_teammate",
 			"team_shutdown",
+			"team_delete",
 			"### User says",
 			"### Lead calls",
 			"### Operator command",
@@ -51,6 +52,7 @@ describe("public team-first contract", () => {
 			"spawn_teammate",
 			"check_teammate",
 			"team_shutdown",
+			"team_delete",
 			"task_create",
 			"task_list",
 			"task_read",
@@ -87,7 +89,7 @@ describe("public team-first contract", () => {
 		assert.equal(pkg.description, "Pi team orchestration extension for named teammates, shared task boards, and raw worker delegation");
 		assert.ok(pkg.keywords?.includes("tasks"), "package keywords should include tasks");
 		assert.ok(pkg.keywords?.includes("teammates"), "package keywords should include teammates");
-		for (const required of ["team_create", "spawn_teammate", "task_list", "check_teammate", "team_shutdown"]) {
+		for (const required of ["team_create", "spawn_teammate", "task_list", "check_teammate", "team_shutdown", "team_delete"]) {
 			assert.ok(prompt.includes(required), `coordinator prompt should include ${required}`);
 			assert.ok(coordinatorAgent.includes(required), `builtin coordinator should include ${required}`);
 		}

@@ -77,6 +77,7 @@ describe("extension loading", { skip: !available ? "pi-test-harness not availabl
 				calls("task_create", { team_name: teamName, subject: "Architecture review", description: "Assess architecture." }),
 				calls("task_list", { team_name: teamName }),
 				calls("team_shutdown", { team_name: teamName }),
+				calls("team_delete", {}),
 				says("Done."),
 			]),
 		);
@@ -85,10 +86,12 @@ describe("extension loading", { skip: !available ? "pi-test-harness not availabl
 		assert.equal(t.events.toolResultsFor("task_create").length, 1, "task_create should respond");
 		assert.equal(t.events.toolResultsFor("task_list").length, 1, "task_list should respond");
 		assert.equal(t.events.toolResultsFor("team_shutdown").length, 1, "team_shutdown should respond");
+		assert.equal(t.events.toolResultsFor("team_delete").length, 1, "team_delete should respond");
 		assert.ok(!t.events.toolResultsFor("team_create")[0].isError, "team_create should succeed");
 		assert.ok(!t.events.toolResultsFor("task_create")[0].isError, "task_create should succeed");
 		assert.ok(!t.events.toolResultsFor("task_list")[0].isError, "task_list should succeed");
 		assert.ok(!t.events.toolResultsFor("team_shutdown")[0].isError, "team_shutdown should succeed");
+		assert.ok(!t.events.toolResultsFor("team_delete")[0].isError, "team_delete should succeed");
 	});
 
 	it("teammate runtime exposes task_update and can claim its own task", async () => {

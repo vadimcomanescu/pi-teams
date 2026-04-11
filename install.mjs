@@ -94,6 +94,7 @@ Primary lead tools:
   • spawn_teammate  - Launch a named teammate inside that team
   • check_teammate  - Inspect teammate status and last summary
   • team_shutdown   - Stop the active team
+  • team_delete     - Physically delete the current lead team after teammates stop
   • task_create     - Add a shared team task
   • task_list       - List shared team tasks
   • task_read       - Read one shared team task

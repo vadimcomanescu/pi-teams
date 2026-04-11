@@ -40,6 +40,7 @@ Primary team surface:
 - **spawn_teammate** — Spawn a named teammate inside that team
 - **check_teammate** — Inspect a teammate's status and last summary
 - **team_shutdown** — Stop all teammates in the active team
+- **team_delete** — Physically delete the current lead team after teammates stop
 - **task_create** / **task_list** / **task_read** / **task_update** — Manage the shared task board
 
 Advanced worker plumbing:

@@ -4,10 +4,17 @@
  * Uses a real AgentRegistry instance — no mocks.
  */
 
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { AgentRegistry } from "../agent-registry.js";
+import { clearLeaderTeamName } from "../leader-team-state.js";
+import { clearSessionCreatedTeams } from "../session-created-teams.js";
+import { TaskStore } from "../task-store.js";
 import { createTaskStopTool } from "../task-stop-tool.js";
+import { TeamManager } from "../team-manager.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,12 +67,21 @@ async function callExecute(
 describe("task_stop tool", () => {
 	let registry: AgentRegistry;
 	let tool: ReturnType<typeof createTaskStopTool>;
+	let tempDir: string;
 
 	beforeEach(() => {
+		clearLeaderTeamName();
+		clearSessionCreatedTeams();
 		registry = makeRegistry();
 		tool = createTaskStopTool(registry);
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-teams-task-stop-"));
 	});
 
+	afterEach(() => {
+		clearLeaderTeamName();
+		clearSessionCreatedTeams();
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	});
 
 	it("stops a running agent by name and returns success", async () => {
 		registerRunning(registry, { id: "run-1", name: "researcher" });
@@ -143,5 +159,36 @@ describe("task_stop tool", () => {
 		await callExecute(tool, { task_id: "fixer" });
 
 		assert.equal(registry.resolve("fixer")!.status, "stopped");
+	});
+
+	it("stop callback can unassign the teammate's open tasks", async () => {
+		const teamManager = new TeamManager({
+			registry,
+			rootDir: tempDir,
+			getCurrentSessionId: () => "lead-session",
+			getCurrentTeammateTeamName: () => null,
+			getCurrentTeammateName: () => null,
+		});
+		teamManager.createTeam({ team_name: "review" });
+		registerRunning(registry, { id: "run-5", name: "docs" });
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "run-5",
+			agentType: "worker",
+			model: undefined,
+			status: "running",
+			cwd: tempDir,
+		});
+		const store = new TaskStore("review", teamManager.getTasksPath("review"));
+		const task = store.createTask("Docs review", "Check README");
+		store.updateTask(task.id, { owner: "docs", status: "in_progress" }, task.version);
+		tool = createTaskStopTool(registry, (agent) => {
+			teamManager.unassignOpenTasksForAgent(agent.id);
+		});
+
+		await callExecute(tool, { task_id: "docs", reason: "superseded" });
+
+		assert.equal(store.readTask(task.id)?.owner, undefined);
+		assert.equal(store.readTask(task.id)?.status, "pending");
 	});
 });

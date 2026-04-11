@@ -4,12 +4,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AgentRegistry } from "../agent-registry.js";
+import { clearLeaderTeamName } from "../leader-team-state.js";
+import { clearSessionCreatedTeams } from "../session-created-teams.js";
 import { TeamManager } from "../team-manager.js";
 import { TaskStore } from "../task-store.js";
 import {
 	createCheckTeammateTool,
 	createSpawnTeammateTool,
 	createTeamCreateTool,
+	createTeamDeleteTool,
 	createTeamShutdownTool,
 } from "../team-tools.js";
 import {
@@ -36,6 +39,8 @@ describe("team tools integration", () => {
 	let spawnedRequests: any[];
 
 	beforeEach(() => {
+		clearLeaderTeamName();
+		clearSessionCreatedTeams();
 		tempDir = makeTempDir();
 		registry = new AgentRegistry();
 		sessionId = "lead-session";
@@ -52,10 +57,12 @@ describe("team tools integration", () => {
 	});
 
 	afterEach(() => {
+		clearLeaderTeamName();
+		clearSessionCreatedTeams();
 		fs.rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	it("creates a team, spawns a teammate, manages tasks, checks status, and shuts down", async () => {
+	it("creates a team, spawns a teammate, manages tasks, checks status, shuts down, and deletes the team", async () => {
 		const createTeam = createTeamCreateTool(teamManager);
 		const createTask = createTaskCreateTool({
 			teamManager,
@@ -90,6 +97,7 @@ describe("team tools integration", () => {
 		});
 		const checkTeammate = createCheckTeammateTool(teamManager);
 		const shutdown = createTeamShutdownTool(teamManager);
+		const deleteTeam = createTeamDeleteTool(teamManager);
 
 		const createdTeam = await exec(createTeam, { team_name: "repo-review", default_model: "anthropic/claude-sonnet-4.6" });
 		assert.equal(createdTeam.details.team_name, "repo-review");
@@ -126,6 +134,11 @@ describe("team tools integration", () => {
 
 		await exec(shutdown, {});
 		assert.equal(teamManager.getTeam("repo-review")?.state, "shutdown");
+
+		const deleted = await exec(deleteTeam, {});
+		assert.equal(deleted.isError, undefined);
+		assert.equal(deleted.details.team_name, "repo-review");
+		assert.equal(teamManager.getTeam("repo-review"), undefined);
 	});
 
 	it("lets teammates read their own team state without repeating team_name", async () => {
@@ -231,6 +244,44 @@ describe("team tools integration", () => {
 		const deleted = await exec(updateTask, { task_id: task.details.id, status: "deleted" });
 		assert.equal(deleted.isError, true);
 		assert.match(deleted.content[0].text, /cannot mark tasks deleted/i);
+	});
+
+	it("refuses team_delete while a teammate is still active", async () => {
+		const createTeam = createTeamCreateTool(teamManager);
+		const spawnTeammate = createSpawnTeammateTool({
+			teamManager,
+			listAssignedTasks: () => [],
+			spawnTeammate: async (request) => {
+				registry.register({
+					id: "worker-1",
+					name: request.name,
+					agentType: "worker",
+					task: request.prompt,
+					status: "running",
+					startTime: Date.now(),
+				});
+				return { agentId: "worker-1", effectiveModel: request.effectiveModel };
+			},
+		});
+		const deleteTeam = createTeamDeleteTool(teamManager);
+
+		await exec(createTeam, { team_name: "repo-review" });
+		await exec(spawnTeammate, {
+			name: "docs",
+			prompt: "Review docs",
+			cwd: tempDir,
+		});
+
+		const deleted = await exec(deleteTeam, {});
+		assert.equal(deleted.isError, true);
+		assert.match(deleted.content[0].text, /non-lead teammates are active: docs/i);
+	});
+
+	it("returns a successful no-op when team_delete has nothing to delete", async () => {
+		const deleteTeam = createTeamDeleteTool(teamManager);
+		const deleted = await exec(deleteTeam, {});
+		assert.equal(deleted.isError, undefined);
+		assert.equal(deleted.details.noop, true);
 	});
 
 	it("prevents teammates from mutating tasks after the team is shut down", async () => {

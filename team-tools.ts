@@ -27,6 +27,8 @@ export const TeamShutdownParams = Type.Object({
 	team_name: Type.Optional(Type.String()),
 });
 
+export const TeamDeleteParams = Type.Object({});
+
 interface SpawnTeammateRequest {
 	teamName: string;
 	name: string;
@@ -228,6 +230,46 @@ export function createTeamShutdownTool(
 		},
 		renderCall(args, theme) {
 			return new Text(`${theme.fg("toolTitle", theme.bold("team_shutdown "))}${args.team_name ?? "(current team)"}`, 0, 0);
+		},
+	};
+}
+
+export function createTeamDeleteTool(
+	teamManager: TeamManager,
+): ToolDefinition<typeof TeamDeleteParams> {
+	return {
+		name: "team_delete",
+		label: "Team Delete",
+		description: "Physically delete the current lead team after all teammates stop",
+		parameters: TeamDeleteParams,
+		async execute() {
+			try {
+				const deleted = teamManager.deleteTeam("Deleted by lead session");
+				if (deleted.noop) {
+					return {
+						content: [{ type: "text" as const, text: "No current team to delete." }],
+						details: {
+							noop: true,
+							removed_paths: deleted.removedPaths,
+							lead_state_cleared: deleted.leadStateCleared,
+						},
+					};
+				}
+				return {
+					content: [{ type: "text" as const, text: `Deleted team "${deleted.teamName}"` }],
+					details: {
+						team_name: deleted.teamName,
+						noop: false,
+						removed_paths: deleted.removedPaths,
+						lead_state_cleared: deleted.leadStateCleared,
+					},
+				};
+			} catch (error) {
+				return toErrorResult(error instanceof Error ? error.message : String(error), { team_name: teamManager.resolveCurrentTeamName() });
+			}
+		},
+		renderCall(_args, theme) {
+			return new Text(`${theme.fg("toolTitle", theme.bold("team_delete "))}(current team)`, 0, 0);
 		},
 	};
 }

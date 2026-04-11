@@ -73,6 +73,7 @@ describe("coordinator system prompt", { skip: !available ? "modules not availabl
 		assert.ok(prompt.includes("team_create"), "should mention team_create");
 		assert.ok(prompt.includes("spawn_teammate"), "should mention spawn_teammate");
 		assert.ok(prompt.includes("task_create"), "should mention task_create");
+		assert.ok(prompt.includes("team_delete"), "should mention team_delete");
 		assert.ok(prompt.includes("send_message"), "should mention send_message tool");
 		assert.ok(prompt.includes("task_stop"), "should mention task_stop tool");
 		assert.ok(prompt.includes("resume an idle teammate"), "should document teammate continuation");
@@ -110,6 +111,7 @@ describe("coordinator system prompt", { skip: !available ? "modules not availabl
 			"task_list",
 			"check_teammate",
 			"team_shutdown",
+			"team_delete",
 		]) {
 			assert.ok(prompt.includes(required), `prompt should include ${required}`);
 			assert.ok(coordinatorAgent.includes(required), `builtin coordinator should include ${required}`);

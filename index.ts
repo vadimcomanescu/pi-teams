@@ -42,6 +42,7 @@ import {
 	WIDGET_KEY,
 } from "./types.js";
 import { AgentRegistry } from "./agent-registry.js";
+import { clearLeaderTeamName } from "./leader-team-state.js";
 import {
 	getCoordinatorSettings,
 	getCurrentTeammateName,
@@ -62,6 +63,7 @@ import {
 	createCheckTeammateTool,
 	createSpawnTeammateTool,
 	createTeamCreateTool,
+	createTeamDeleteTool,
 	createTeamShutdownTool,
 } from "./team-tools.js";
 import {
@@ -226,6 +228,14 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 
 	const registry = new AgentRegistry();
 	const lifecycleDedupe = createLifecycleDedupe();
+	const appendUnassignedTaskSummary = (
+		summary: string,
+		unassigned: { unassignedTasks: Array<{ id: string; subject: string }> },
+	): string => {
+		if (unassigned.unassignedTasks.length === 0) return summary;
+		const listedTasks = unassigned.unassignedTasks.map((task) => `${task.id} "${task.subject}"`).join(", ");
+		return `${summary}\nUnassigned ${unassigned.unassignedTasks.length} open task(s): ${listedTasks}`;
+	};
 	const emitTeamCompletion = (payload: {
 		id: string;
 		agent: string;
@@ -252,13 +262,13 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 		getCurrentSessionId: () => state.currentSessionId,
 		getCurrentTeammateTeamName,
 		getCurrentTeammateName,
-		onMemberStopped: (member, team, reason) => {
+		onMemberStopped: (member, team, reason, unassigned) => {
 			emitTeamCompletion({
 				id: member.agentId,
 				agent: member.agentType,
 				name: member.name,
 				status: "stopped",
-				summary: reason ?? `Team "${team.name}" stopped by lead session`,
+				summary: appendUnassignedTaskSummary(reason ?? `Team "${team.name}" stopped by lead session`, unassigned),
 			});
 		},
 	});
@@ -501,12 +511,13 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 			}),
 		}));
 		pi.registerTool(createTaskStopTool(registry, (agent) => {
+			const unassigned = teamManager.unassignOpenTasksForAgent(agent.id);
 			emitTeamCompletion({
 				id: agent.id,
 				agent: agent.agent,
 				name: agent.name,
 				status: "stopped",
-				summary: agent.summary,
+				summary: appendUnassignedTaskSummary(agent.summary, unassigned),
 			});
 		}));
 		pi.registerTool(createTeamCreateTool(teamManager));
@@ -545,6 +556,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 			},
 		}));
 		pi.registerTool(createTeamShutdownTool(teamManager));
+		pi.registerTool(createTeamDeleteTool(teamManager));
 		pi.registerTool(createTaskCreateTool({ teamManager, createTaskStore }));
 		registerSlashCommands(pi, state, {
 			registry,
@@ -620,19 +632,22 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		if (isLeadRuntime) {
 			teamManager.bootstrap();
 			registry.startTimeoutSweeper(getCoordinatorSettings().workerTimeoutMs, 30_000, (agent) => {
+				const unassigned = teamManager.unassignOpenTasksForAgent(agent.id);
 				emitTeamCompletion({
 					id: agent.id,
 					agent: agent.agentType,
 					name: agent.name,
 					status: "timed_out",
-					summary: `Timed out after ${getCoordinatorSettings().workerTimeoutMs}ms`,
+					summary: appendUnassignedTaskSummary(`Timed out after ${getCoordinatorSettings().workerTimeoutMs}ms`, unassigned),
 				});
 			});
 		}
 	});
 	pi.on("session_switch", (_event, ctx) => {
+		const previousSessionId = state.currentSessionId;
 		if (isLeadRuntime) {
-			teamManager.shutdownActiveTeam("Lead session switched");
+			teamManager.cleanupSessionTeams("Lead session switched");
+			clearLeaderTeamName(previousSessionId);
 		}
 		registry.dispose();
 		resetSessionState(ctx);
@@ -641,8 +656,10 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		}
 	});
 	pi.on("session_branch", (_event, ctx) => {
+		const previousSessionId = state.currentSessionId;
 		if (isLeadRuntime) {
-			teamManager.shutdownActiveTeam("Lead session branched");
+			teamManager.cleanupSessionTeams("Lead session branched");
+			clearLeaderTeamName(previousSessionId);
 		}
 		registry.dispose();
 		resetSessionState(ctx);
@@ -651,8 +668,10 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		}
 	});
 	pi.on("session_shutdown", () => {
+		const previousSessionId = state.currentSessionId;
 		if (isLeadRuntime) {
-			teamManager.shutdownActiveTeam("Lead session shutdown");
+			teamManager.cleanupSessionTeams("Lead session shutdown");
+			clearLeaderTeamName(previousSessionId);
 		}
 		registry.dispose();
 		stopResultWatcher();

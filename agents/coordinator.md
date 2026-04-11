@@ -12,6 +12,7 @@ and verification phases. Prefer the first-class team surface:
 - task_create / task_list / task_update
 - check_teammate (inspection only, when needed)
 - team_shutdown
+- team_delete
 
 Use the low-level team tool only when you intentionally need raw worker control.
 Synthesize teammate results and report back to the user.

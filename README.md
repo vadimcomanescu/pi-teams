@@ -54,6 +54,7 @@ Lead sessions use the coordinator prompt by default. Start with the first-class 
 | `spawn_teammate` | Launch a named teammate inside that team |
 | `check_teammate` | Inspect teammate status and last summary |
 | `team_shutdown` | Stop the active team |
+| `team_delete` | Physically delete the current lead team after teammates stop |
 | `task_create` / `task_list` / `task_read` / `task_update` | Manage the shared task board |
 
 ### Advanced worker tools
@@ -66,6 +67,8 @@ Lead sessions use the coordinator prompt by default. Start with the first-class 
 | `task_stop` | Stop a running teammate or worker |
 
 > After `team_create`, follow-up team and task tools can omit `team_name`. They resolve against the current team automatically.
+>
+> `team_shutdown` stops teammates and marks the team shutdown. `team_delete` is the final physical cleanup step.
 >
 > `task_update` is shared board state. Leads can edit any task. Teammates can claim and complete their own tasks.
 

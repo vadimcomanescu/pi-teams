@@ -38,6 +38,7 @@ describe(
 				"spawn_teammate",
 				"check_teammate",
 				"team_shutdown",
+				"team_delete",
 				"task_create",
 				"task_list",
 				"task_read",

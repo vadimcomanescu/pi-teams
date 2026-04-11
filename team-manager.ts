@@ -3,6 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { RegisteredAgent, AgentRegistry, AgentStatus } from "./agent-registry.js";
 import { withFileLock, writeJsonAtomically } from "./state-file-utils.js";
+import { clearLeaderTeamName, getLeaderTeamName, setLeaderTeamName } from "./leader-team-state.js";
+import { clearSessionCreatedTeams, getSessionCreatedTeams, registerTeamForSessionCleanup, unregisterTeamForSessionCleanup } from "./session-created-teams.js";
+import { TaskStore, type UnassignTasksForOwnerResult } from "./task-store.js";
 import { describeTeammateLifecycle, type TeammateLifecycle } from "./teammate-lifecycle.js";
 
 export type TeamState = "active" | "shutdown" | "orphaned";
@@ -40,6 +43,19 @@ export interface CheckedTeammate {
 	lifecycle: TeammateLifecycle;
 }
 
+export interface DeleteTeamResult {
+	teamName?: string;
+	noop: boolean;
+	removedPaths: string[];
+	leadStateCleared: boolean;
+}
+
+export interface SessionCleanupResult {
+	teamNames: string[];
+	cleanedTeams: string[];
+	failures: Array<{ teamName: string; step: "stop" | "delete"; message: string }>;
+}
+
 export type TaskMutationActor =
 	| { kind: "lead" }
 	| { kind: "teammate"; name: string };
@@ -51,7 +67,7 @@ interface TeamManagerOptions {
 	getCurrentTeammateName?: () => string | null;
 	rootDir?: string;
 	now?: () => number;
-	onMemberStopped?: (member: TeamMember, team: Team, reason?: string) => void;
+	onMemberStopped?: (member: TeamMember, team: Team, reason: string | undefined, unassigned: UnassignTasksForOwnerResult) => void;
 }
 
 export class TeamConfigError extends Error {}
@@ -174,10 +190,47 @@ export class TeamManager {
 		return this.listTeams().find((team) => team.leadSessionId === sessionId && team.state === "active");
 	}
 
+	private isTeammateRuntime(): boolean {
+		return Boolean(this.options.getCurrentTeammateTeamName?.());
+	}
+
+	private rememberLeadTeamContext(teamName: string): void {
+		if (this.isTeammateRuntime()) return;
+		setLeaderTeamName(this.requireLeadSessionId(), teamName);
+	}
+
+	private clearLeadTeamContext(teamName?: string): void {
+		const sessionId = this.options.getCurrentSessionId();
+		if (!sessionId) return;
+		const rememberedTeamName = getLeaderTeamName(sessionId);
+		if (!teamName || rememberedTeamName === teamName) {
+			clearLeaderTeamName(sessionId);
+		}
+	}
+
+	private resolveRememberedLeadTeam(): Team | undefined {
+		const sessionId = this.options.getCurrentSessionId();
+		const rememberedTeamName = getLeaderTeamName(sessionId);
+		if (!rememberedTeamName) return undefined;
+		const team = this.safeReadTeamFile(this.getConfigPath(rememberedTeamName));
+		if (!team || !sessionId || team.leadSessionId !== sessionId) {
+			this.clearLeadTeamContext(rememberedTeamName);
+			return undefined;
+		}
+		return team;
+	}
+
 	resolveCurrentTeamName(): string | undefined {
 		const teammateTeamName = this.options.getCurrentTeammateTeamName?.() ?? undefined;
 		if (teammateTeamName) return teammateTeamName;
-		return this.getActiveTeam()?.name;
+		const rememberedLeadTeam = this.resolveRememberedLeadTeam();
+		if (rememberedLeadTeam) return rememberedLeadTeam.name;
+		const activeTeam = this.getActiveTeam();
+		if (activeTeam) {
+			this.rememberLeadTeamContext(activeTeam.name);
+			return activeTeam.name;
+		}
+		return undefined;
 	}
 
 	private resolveRequestedTeamName(teamName?: string): string {
@@ -268,6 +321,10 @@ export class TeamManager {
 					this.writeTeam(team);
 				}
 			}
+			const activeTeam = this.getActiveTeam();
+			if (activeTeam) {
+				this.rememberLeadTeamContext(activeTeam.name);
+			}
 		});
 	}
 
@@ -310,6 +367,8 @@ export class TeamManager {
 				state: "active",
 			};
 			this.writeTeam(team);
+			this.rememberLeadTeamContext(team.name);
+			registerTeamForSessionCleanup(sessionId, team.name);
 			return team;
 		});
 	}
@@ -354,6 +413,23 @@ export class TeamManager {
 
 	private resolveLiveTeammate(member: TeamMember): RegisteredAgent | undefined {
 		return this.options.registry.resolve(member.agentId) ?? this.options.registry.resolve(member.name);
+	}
+
+	private unassignTasksForMember(teamName: string, member: Pick<TeamMember, "name" | "agentId">): UnassignTasksForOwnerResult {
+		return new TaskStore(teamName, this.getTasksPath(teamName)).unassignTasksForOwner(member.name, {
+			aliases: [member.agentId],
+		});
+	}
+
+	unassignOpenTasksForAgent(agentId: string): UnassignTasksForOwnerResult {
+		return this.withRootLock(() => {
+			for (const team of this.listTeams()) {
+				const member = team.members.find((entry) => entry.agentId === agentId);
+				if (!member) continue;
+				return this.unassignTasksForMember(team.name, member);
+			}
+			return { unassignedTasks: [] };
+		});
 	}
 
 	checkTeammate(teamName: string | undefined, agentName: string): CheckedTeammate {
@@ -412,6 +488,9 @@ export class TeamManager {
 				if (lastSummary !== undefined) {
 					member.lastSummary = lastSummary;
 				}
+				if (status === "stopped" || status === "timed_out" || status === "failed") {
+					this.unassignTasksForMember(team.name, member);
+				}
 				this.writeTeam(team);
 				return;
 			}
@@ -422,22 +501,131 @@ export class TeamManager {
 		return this.withRootLock(() => {
 			const team = this.assertLeadControl(teamName);
 			if (team.state === "shutdown") {
+				this.rememberLeadTeamContext(team.name);
 				return team;
 			}
 			team.state = "shutdown";
 			team.shutdownAt = this.now();
 			for (const member of team.members) {
 				const live = this.options.registry.resolve(member.agentId);
+				const unassigned = this.unassignTasksForMember(team.name, member);
 				if (live?.status === "running") {
 					this.options.registry.stopAgent(member.agentId);
 					member.status = "stopped";
 					member.lastSummary = member.lastSummary ?? reason;
 					member.updatedAt = this.now();
-					this.onMemberStopped?.(member, team, reason);
+					this.onMemberStopped?.(member, team, reason, unassigned);
+					continue;
+				}
+				if (unassigned.unassignedTasks.length > 0) {
+					member.lastSummary = member.lastSummary ?? reason;
+					member.updatedAt = this.now();
 				}
 			}
 			this.writeTeam(team);
+			this.rememberLeadTeamContext(team.name);
 			return team;
+		});
+	}
+
+	private collectActiveNonLeadMembers(team: Team): TeamMember[] {
+		return team.members.filter((member) => (this.resolveLiveTeammate(member)?.status ?? member.status) === "running");
+	}
+
+	private deletePersistedTeam(teamName: string): string[] {
+		const configPath = this.getConfigPath(teamName);
+		const tasksPath = this.getTasksPath(teamName);
+		const teamDir = this.getTeamDir(teamName);
+		const removedPaths = [configPath, tasksPath, teamDir].filter((entry, index, values) => values.indexOf(entry) === index && fs.existsSync(entry));
+		fs.rmSync(configPath, { force: true });
+		fs.rmSync(tasksPath, { force: true });
+		fs.rmSync(teamDir, { recursive: true, force: true });
+		return removedPaths;
+	}
+
+	deleteTeam(_reason?: string): DeleteTeamResult {
+		return this.withRootLock(() => {
+			if (this.isTeammateRuntime()) {
+				throw new Error("Only the lead session may delete the current team.");
+			}
+			const sessionId = this.requireLeadSessionId();
+			const team = this.resolveRememberedLeadTeam() ?? this.getActiveTeam();
+			if (!team) {
+				this.clearLeadTeamContext();
+				clearLeaderTeamName(sessionId);
+				return { noop: true, removedPaths: [], leadStateCleared: true };
+			}
+			const activeMembers = this.collectActiveNonLeadMembers(team);
+			if (activeMembers.length > 0) {
+				throw new Error(`Cannot delete team "${team.name}" while non-lead teammates are active: ${activeMembers.map((member) => member.name).join(", ")}`);
+			}
+			const removedPaths = this.deletePersistedTeam(team.name);
+			this.clearLeadTeamContext(team.name);
+			clearLeaderTeamName(sessionId);
+			unregisterTeamForSessionCleanup(sessionId, team.name);
+			return {
+				teamName: team.name,
+				noop: false,
+				removedPaths,
+				leadStateCleared: true,
+			};
+		});
+	}
+
+	cleanupSessionTeams(reason?: string): SessionCleanupResult {
+		return this.withRootLock(() => {
+			const sessionId = this.requireLeadSessionId();
+			const teamNames = getSessionCreatedTeams(sessionId);
+			if (teamNames.length === 0) {
+				clearLeaderTeamName(sessionId);
+				return { teamNames: [], cleanedTeams: [], failures: [] };
+			}
+			const cleanedTeams: string[] = [];
+			const failures: SessionCleanupResult["failures"] = [];
+			console.info(`[pi-teams] cleanupSessionTeams: removing ${teamNames.length} team(s): ${teamNames.join(", ")}`);
+			for (const teamName of teamNames) {
+				const team = this.safeReadTeamFile(this.getConfigPath(teamName));
+				if (!team) {
+					unregisterTeamForSessionCleanup(sessionId, teamName);
+					continue;
+				}
+				for (const member of team.members) {
+					const live = this.resolveLiveTeammate(member);
+					if ((live?.status ?? member.status) !== "running") continue;
+					try {
+						this.options.registry.stopAgent(member.agentId);
+						member.status = "stopped";
+						member.lastSummary = member.lastSummary ?? reason;
+						member.updatedAt = this.now();
+						const unassigned = this.unassignTasksForMember(team.name, member);
+						this.onMemberStopped?.(member, team, reason, unassigned);
+					} catch (error) {
+						failures.push({
+							teamName,
+							step: "stop",
+							message: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
+				try {
+					this.deletePersistedTeam(teamName);
+					cleanedTeams.push(teamName);
+					unregisterTeamForSessionCleanup(sessionId, teamName);
+				} catch (error) {
+					failures.push({
+						teamName,
+						step: "delete",
+						message: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}
+			this.clearLeadTeamContext();
+			clearLeaderTeamName(sessionId);
+			clearSessionCreatedTeams(sessionId);
+			for (const failure of failures) {
+				console.warn(`[pi-teams] cleanupSessionTeams ${failure.step} failed for ${failure.teamName}: ${failure.message}`);
+			}
+			return { teamNames, cleanedTeams, failures };
 		});
 	}
 

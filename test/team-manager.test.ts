@@ -4,6 +4,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AgentRegistry } from "../agent-registry.js";
+import { clearLeaderTeamName } from "../leader-team-state.js";
+import { clearSessionCreatedTeams } from "../session-created-teams.js";
+import { TaskStore } from "../task-store.js";
 import { TeamConfigError, TeamManager } from "../team-manager.js";
 
 function makeTempDir(): string {
@@ -19,6 +22,8 @@ describe("TeamManager", () => {
 	let teamManager: TeamManager;
 
 	beforeEach(() => {
+		clearLeaderTeamName();
+		clearSessionCreatedTeams();
 		tempDir = makeTempDir();
 		registry = new AgentRegistry();
 		currentSessionId = "session-a";
@@ -34,6 +39,8 @@ describe("TeamManager", () => {
 	});
 
 	afterEach(() => {
+		clearLeaderTeamName();
+		clearSessionCreatedTeams();
 		fs.rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -207,7 +214,7 @@ describe("TeamManager", () => {
 		);
 	});
 
-	it("shuts down a team and preserves stopped status against later exit races", () => {
+	it("shuts down a team, unassigns its open tasks, and preserves stopped status against later exit races", () => {
 		teamManager.createTeam({ team_name: "review" });
 		registry.register({
 			id: "worker-1",
@@ -225,17 +232,22 @@ describe("TeamManager", () => {
 			status: "running",
 			cwd: tempDir,
 		});
+		const store = new TaskStore("review", teamManager.getTasksPath("review"));
+		const task = store.createTask("Docs review", "Check README");
+		store.updateTask(task.id, { owner: "docs", status: "in_progress" }, task.version);
 
 		const shutdown = teamManager.shutdownTeam("review", "done");
 		assert.equal(shutdown.state, "shutdown");
 		assert.equal(teamManager.checkTeammate("review", "docs").status, "stopped");
+		assert.equal(store.readTask(task.id)?.status, "pending");
+		assert.equal(store.readTask(task.id)?.owner, undefined);
 
 		registry.updateStatus("worker-1", "completed", "late exit");
 		teamManager.recordTeammateStatus("worker-1", "completed", "late exit");
 		assert.equal(teamManager.checkTeammate("review", "docs").status, "stopped");
 	});
 
-	it("preserves timed_out status against later process exit races", () => {
+	it("preserves timed_out status against later process exit races and unassigns open tasks", () => {
 		teamManager.createTeam({ team_name: "review" });
 		registry.register({
 			id: "worker-1",
@@ -253,16 +265,41 @@ describe("TeamManager", () => {
 			status: "running",
 			cwd: tempDir,
 		});
+		const store = new TaskStore("review", teamManager.getTasksPath("review"));
+		const task = store.createTask("Docs review", "Check README");
+		store.updateTask(task.id, { owner: "docs", status: "in_progress" }, task.version);
 
 		registry.updateStatus("worker-1", "timed_out", "Timed out after 5000ms");
 		teamManager.recordTeammateStatus("worker-1", "timed_out", "Timed out after 5000ms");
 		assert.equal(teamManager.checkTeammate("review", "docs").status, "timed_out");
+		assert.equal(store.readTask(task.id)?.status, "pending");
+		assert.equal(store.readTask(task.id)?.owner, undefined);
 
 		registry.updateStatus("worker-1", "failed", "late exit after timeout");
 		teamManager.recordTeammateStatus("worker-1", "failed", "late exit after timeout");
 		const status = teamManager.checkTeammate("review", "docs");
 		assert.equal(status.status, "timed_out");
 		assert.equal(status.lastSummary, "Timed out after 5000ms");
+	});
+
+	it("shutdownTeam unassigns tasks even when a teammate is already non-running", () => {
+		teamManager.createTeam({ team_name: "review" });
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			model: undefined,
+			status: "timed_out",
+			cwd: tempDir,
+		});
+		const store = new TaskStore("review", teamManager.getTasksPath("review"));
+		const task = store.createTask("Docs review", "Check README");
+		store.updateTask(task.id, { owner: "worker-1", status: "in_progress" }, task.version);
+
+		teamManager.shutdownTeam("review", "done");
+
+		assert.equal(store.readTask(task.id)?.status, "pending");
+		assert.equal(store.readTask(task.id)?.owner, undefined);
 	});
 
 	it("round-trips persistence including state", () => {
