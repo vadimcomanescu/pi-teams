@@ -85,7 +85,7 @@ describe("public team-first contract", () => {
 		const prompt = readLocal("coordinator-prompt.ts");
 		const coordinatorAgent = readLocal("agents/coordinator.md");
 		const workerAgent = readLocal("agents/worker.md");
-		const activePlan = readLocal("plans/team-lifecycle-alignment-plan.md");
+		const archivedAlignmentPlan = readLocal("plans/archive/team-lifecycle-alignment-plan.md");
 		const archivedPlan = readLocal("plans/archive/pi-teams-v1-launch.md");
 		const forbiddenReference = `Claude${" "}Code`;
 		assert.equal(pkg.description, "Pi team orchestration extension for named teammates, shared task boards, and coordinated execution");
@@ -104,7 +104,7 @@ describe("public team-first contract", () => {
 		assert.ok(!workerAgent.includes("Treat task state as lead-owned"), "worker prompt should not teach the removed lead-owned task canon");
 		assert.ok(!prompt.includes("--coordinator"), "coordinator prompt should not require a coordinator flag");
 		assert.ok(!coordinatorAgent.includes("--coordinator"), "builtin coordinator should not require a coordinator flag");
-		assert.ok(!activePlan.includes(forbiddenReference), "active plan should not mention the forbidden reference phrase");
+		assert.ok(!archivedAlignmentPlan.includes(forbiddenReference), "archived alignment plan should not mention the forbidden reference phrase");
 		assert.ok(!archivedPlan.includes(forbiddenReference), "archived plan should not mention the forbidden reference phrase");
 	});
 });
