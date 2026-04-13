@@ -10,6 +10,8 @@ export interface TeamTask {
 	description: string;
 	status: TeamTaskStatus;
 	owner?: string;
+	dependsOn: string[];
+	blocked?: boolean;
 	createdAt: number;
 	updatedAt: number;
 	version: number;
@@ -55,7 +57,19 @@ export class TaskStore {
 			}
 			return {
 				schemaVersion: 1,
-				tasks: parsed.tasks.map((task) => ({ ...task })),
+				tasks: parsed.tasks.map((task) => ({
+					id: task.id,
+					subject: task.subject,
+					description: task.description,
+					status: task.status,
+					owner: task.owner,
+					dependsOn: Array.isArray(task.dependsOn)
+						? task.dependsOn.filter((entry): entry is string => typeof entry === "string")
+						: [],
+					createdAt: task.createdAt,
+					updatedAt: task.updatedAt,
+					version: task.version,
+				})),
 			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -71,12 +85,41 @@ export class TaskStore {
 		return withFileLock(this.tasksPath, callback);
 	}
 
+	private computeBlocked(file: TaskFile, task: TeamTask): boolean {
+		if (task.dependsOn.length === 0) return false;
+		for (const dependencyId of task.dependsOn) {
+			const prerequisite = file.tasks.find((entry) => entry.id === dependencyId);
+			if (!prerequisite || prerequisite.status !== "completed") {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private withBlockedState(file: TaskFile, task: TeamTask): TeamTask {
+		return { ...task, blocked: this.computeBlocked(file, task) };
+	}
+
+	private normalizeDependsOn(taskId: string, dependsOn: string[] | undefined): string[] | undefined {
+		if (dependsOn === undefined) return undefined;
+		const normalized = [...new Set(dependsOn
+			.map((entry) => entry.trim())
+			.filter(Boolean))];
+		if (normalized.includes(taskId)) {
+			throw new Error(`Task "${taskId}" cannot depend on itself.`);
+		}
+		return normalized;
+	}
+
 	listTasks(): TeamTask[] {
-		return this.readFile().tasks;
+		const file = this.readFile();
+		return file.tasks.map((task) => this.withBlockedState(file, task));
 	}
 
 	readTask(taskId: string): TeamTask | undefined {
-		return this.readFile().tasks.find((task) => task.id === taskId);
+		const file = this.readFile();
+		const task = file.tasks.find((entry) => entry.id === taskId);
+		return task ? this.withBlockedState(file, task) : undefined;
 	}
 
 	createTask(subject: string, description: string): TeamTask {
@@ -88,19 +131,20 @@ export class TaskStore {
 				subject,
 				description,
 				status: "pending",
+				dependsOn: [],
 				createdAt: now,
 				updatedAt: now,
 				version: 1,
 			};
 			file.tasks.push(task);
 			this.writeFile(file);
-			return task;
+			return this.withBlockedState(file, task);
 		});
 	}
 
 	updateTask(
 		taskId: string,
-		changes: { status?: TeamTaskStatus; owner?: string },
+		changes: { status?: TeamTaskStatus; owner?: string; dependsOn?: string[] },
 		expectedVersion: number,
 	): TeamTask {
 		return this.withWriteLock(() => {
@@ -114,16 +158,23 @@ export class TaskStore {
 					`Version mismatch for task "${taskId}": expected ${expectedVersion}, found ${task.version}`,
 				);
 			}
+			const normalizedDependsOn = this.normalizeDependsOn(task.id, changes.dependsOn);
+			if (normalizedDependsOn !== undefined) {
+				task.dependsOn = normalizedDependsOn;
+			}
 			if (changes.status !== undefined) {
 				task.status = changes.status;
 			}
 			if (Object.prototype.hasOwnProperty.call(changes, "owner")) {
 				task.owner = changes.owner;
 			}
+			if ((task.status === "in_progress" || task.status === "completed") && this.computeBlocked(file, task)) {
+				throw new Error(`Task "${task.id}" is blocked by unfinished dependencies.`);
+			}
 			task.updatedAt = Date.now();
 			task.version += 1;
 			this.writeFile(file);
-			return { ...task };
+			return this.withBlockedState(file, task);
 		});
 	}
 

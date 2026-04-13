@@ -15,6 +15,7 @@ import type { AgentRegistry, RegisteredAgent } from "./agent-registry.js";
 import { describeTeammateLifecycle } from "./teammate-lifecycle.js";
 import type { ResumeAgentFn } from "./teammate-continuation.js";
 import type { TeamManager } from "./team-manager.js";
+import { enqueueMailboxMessage } from "./teammate-mailbox.js";
 import type { TeammateControlMessage } from "./types.js";
 
 const ShutdownRequestMessage = Type.Object({
@@ -28,6 +29,11 @@ const ShutdownResponseMessage = Type.Object({
 	reason: Type.Optional(Type.String({ description: "Required when approve=false" })),
 });
 
+const ModeSetRequestMessage = Type.Object({
+	type: Type.Literal("mode_set_request"),
+	mode: Type.String({ description: "Requested teammate mode (default|plan|execute)" }),
+});
+
 export const SendMessageParams = Type.Object({
 	to: Type.String({ description: "Agent name or ID to send message to" }),
 	summary: Type.Optional(Type.String({ description: "Required when message is plain text" })),
@@ -35,6 +41,7 @@ export const SendMessageParams = Type.Object({
 		Type.String({ description: "Plain-text follow-up message" }),
 		ShutdownRequestMessage,
 		ShutdownResponseMessage,
+		ModeSetRequestMessage,
 	]),
 });
 
@@ -49,16 +56,22 @@ interface ShutdownResponsePayload {
 	reason?: string;
 }
 
-type StructuredSendMessagePayload = ShutdownRequestPayload | ShutdownResponsePayload;
+interface ModeSetRequestPayload {
+	type: "mode_set_request";
+	mode: string;
+}
+
+type StructuredSendMessagePayload = ShutdownRequestPayload | ShutdownResponsePayload | ModeSetRequestPayload;
 type SendMessagePayload = string | StructuredSendMessagePayload;
 
 export interface SendMessageDetails {
 	to: string;
 	delivered: "queued" | "resumed" | "handled" | "failed" | "error";
 	agent_id?: string;
-	message_type?: "plain_text" | "shutdown_request" | "shutdown_response";
+	message_type?: "plain_text" | "shutdown_request" | "shutdown_response" | "mode_set_request";
 	request_id?: string;
 	approved?: boolean;
+	mode?: string;
 }
 
 interface SendMessageToolOptions {
@@ -101,6 +114,16 @@ function formatShutdownRequestPrompt(input: { requestId: string; summary?: strin
 	].join("\n");
 }
 
+const VALID_TEAMMATE_MODES = ["default", "plan", "execute"] as const;
+
+function normalizeRequestedMode(mode: string): (typeof VALID_TEAMMATE_MODES)[number] {
+	const normalized = mode.trim().toLowerCase();
+	if (normalized === "default" || normalized === "plan" || normalized === "execute") {
+		return normalized;
+	}
+	throw new Error(`Invalid teammate mode: ${mode}. Valid modes: ${VALID_TEAMMATE_MODES.join(", ")}`);
+}
+
 function emitTeammateControlMessage(message: TeammateControlMessage): void {
 	process.stdout.write(`${JSON.stringify({ type: "teammate_control_message", message })}\n`);
 }
@@ -112,6 +135,9 @@ function renderMessagePreview(message: SendMessagePayload, summary?: string): st
 	}
 	if (message.type === "shutdown_request") {
 		return summary?.trim() ? `shutdown_request: ${summary.trim()}` : "shutdown_request";
+	}
+	if (message.type === "mode_set_request") {
+		return `mode_set_request: ${message.mode}`;
 	}
 	if (message.approve) {
 		return `shutdown_response approve (${message.request_id})`;
@@ -140,11 +166,39 @@ export function createSendMessageTool(
 		};
 	};
 
+	const resolveLifecycle = (agent: RegisteredAgent) => {
+		if (options.teamManager && agent.runtimeRole === "teammate" && agent.teamMetadata?.teamName && agent.teamMetadata.teammateName) {
+			try {
+				const teammate = options.teamManager.checkTeammate(agent.teamMetadata.teamName, agent.teamMetadata.teammateName);
+				return {
+					lifecycle: teammate.lifecycle,
+					status: teammate.status,
+					sessionFile: teammate.sessionFile,
+				};
+			} catch {
+				// Fall back to raw registry state when team state is unavailable.
+			}
+		}
+		return {
+			lifecycle: describeTeammateLifecycle({
+				status: agent.status,
+				sessionFile: agent.sessionFile,
+				acceptsFollowUps: Boolean(agent.rpcHandle),
+			}),
+			status: agent.status,
+			sessionFile: agent.sessionFile,
+		};
+	};
+
 	const queueFollowUp = (agent: RegisteredAgent, label: string, message: string, details: SendMessageDetails) => {
 		try {
 			agent.rpcHandle!.stdin.write(
 				JSON.stringify({ type: "follow_up", message }) + "\n",
 			);
+			registry.patch(agent.id, { lastUpdateAt: Date.now() });
+			if (agent.runtimeRole === "teammate" && agent.teamMetadata?.teamName) {
+				options.teamManager?.recordTeammateActivity(agent.id, true);
+			}
 		} catch {
 			return toResult(
 				"Failed to deliver message: worker stdin closed",
@@ -159,6 +213,49 @@ export function createSendMessageTool(
 				: `Message queued for "${label}"`,
 			{ ...details, to: label, delivered: "queued", agent_id: agent.id },
 		);
+	};
+
+	const queueMailboxMessage = (
+		teamName: string,
+		recipient: string,
+		message: {
+			from: string;
+			payload: { type: "plain_text"; text: string; summary?: string } | { type: "shutdown_response"; requestId: string; approve: boolean; reason?: string };
+		},
+		label: string,
+		details: SendMessageDetails,
+		agentId?: string,
+	) => {
+		if (!options.teamManager) {
+			return toResult(
+				"Mailbox delivery is unavailable because team state is not configured in this runtime.",
+				{ ...details, to: label, delivered: "error" },
+				true,
+			);
+		}
+		try {
+			enqueueMailboxMessage(options.teamManager.getTeamDir(teamName), recipient, {
+				from: message.from,
+				to: recipient,
+				payload: message.payload,
+			});
+			if (agentId) {
+				registry.patch(agentId, { lastUpdateAt: Date.now() });
+				options.teamManager.recordTeammateActivity(agentId, true);
+			}
+			return toResult(
+				details.message_type === "shutdown_request"
+					? `Graceful shutdown requested from "${label}"`
+					: `Message queued for "${label}" inbox`,
+				{ ...details, to: label, delivered: "queued", agent_id: agentId },
+			);
+		} catch (error) {
+			return toResult(
+				`Failed to write mailbox message: ${error instanceof Error ? error.message : String(error)}`,
+				{ ...details, to: label, delivered: "failed", agent_id: agentId },
+				true,
+			);
+		}
 	};
 
 	const handlePlainTextMessage = async (
@@ -184,17 +281,43 @@ export function createSendMessageTool(
 				true,
 			);
 		}
+		if (runtimeRole === "teammate" && target.trim().toLowerCase() === "lead") {
+			const identity = options.teamManager?.getCurrentTeammateIdentity() ?? null;
+			if (!identity) {
+				return toResult(
+					"Teammate runtime is missing team identity for inbox delivery.",
+					{ to: target, delivered: "error", message_type: "plain_text" },
+					true,
+				);
+			}
+			return queueMailboxMessage(identity.teamName, "lead", {
+				from: identity.teammateName,
+				payload: { type: "plain_text", text: trimmedMessage, summary: trimmedSummary },
+			}, "lead", {
+				to: "lead",
+				delivered: "queued",
+				message_type: "plain_text",
+			});
+		}
+
 		const resolved = resolveAgent(target);
 		if (resolved.error) return resolved.error;
 		const agent = resolved.agent!;
 		const label = agent.name ?? agent.id;
-		const lifecycle = describeTeammateLifecycle({
-			status: agent.status,
-			sessionFile: agent.sessionFile,
-			acceptsFollowUps: Boolean(agent.rpcHandle),
-		});
+		const { lifecycle, status, sessionFile } = resolveLifecycle(agent);
 
 		if (lifecycle.canQueueFollowUp) {
+			if (runtimeRole === "lead" && agent.runtimeRole === "teammate" && options.teamManager && agent.teamMetadata?.teamName) {
+				const recipient = agent.teamMetadata.teammateName || agent.name || agent.id;
+				return queueMailboxMessage(agent.teamMetadata.teamName, recipient, {
+					from: "lead",
+					payload: { type: "plain_text", text: trimmedMessage, summary: trimmedSummary },
+				}, label, {
+					to: label,
+					delivered: "queued",
+					message_type: "plain_text",
+				}, agent.id);
+			}
 			return queueFollowUp(agent, label, trimmedMessage, {
 				to: label,
 				delivered: "queued",
@@ -203,9 +326,9 @@ export function createSendMessageTool(
 		}
 
 		if (!lifecycle.canResume) {
-			const reason = agent.status === "running"
+			const reason = status === "running"
 				? lifecycle.continuationText
-				: agent.sessionFile
+				: sessionFile
 					? lifecycle.continuationText
 					: "has no resumable session. Spawn a fresh teammate if you need to continue this work";
 			return toResult(
@@ -264,11 +387,7 @@ export function createSendMessageTool(
 				true,
 			);
 		}
-		const lifecycle = describeTeammateLifecycle({
-			status: agent.status,
-			sessionFile: agent.sessionFile,
-			acceptsFollowUps: Boolean(agent.rpcHandle),
-		});
+		const { lifecycle } = resolveLifecycle(agent);
 		if (!lifecycle.canQueueFollowUp) {
 			return toResult(
 				`Agent "${label}": ${lifecycle.continuationText}.`,
@@ -278,12 +397,20 @@ export function createSendMessageTool(
 		}
 
 		const requestId = randomUUID();
-		const queued = queueFollowUp(agent, label, formatShutdownRequestPrompt({ requestId, summary }), {
+		const recipient = agent.teamMetadata.teammateName || agent.name || agent.id;
+		const queued = queueMailboxMessage(agent.teamMetadata.teamName, recipient, {
+			from: "lead",
+			payload: {
+				type: "plain_text",
+				text: formatShutdownRequestPrompt({ requestId, summary }),
+				summary: summary?.trim(),
+			},
+		}, label, {
 			to: label,
 			delivered: "queued",
 			message_type: "shutdown_request",
 			request_id: requestId,
-		});
+		}, agent.id);
 		if (queued.isError) {
 			options.teamManager?.clearPendingShutdownRequest(agent.id, requestId);
 			return queued;
@@ -296,6 +423,82 @@ export function createSendMessageTool(
 			return toResult(
 				error instanceof Error ? error.message : String(error),
 				{ to: label, delivered: "error", message_type: "shutdown_request", request_id: requestId },
+				true,
+			);
+		}
+	};
+
+	const handleModeSetRequest = (target: string, payload: ModeSetRequestPayload) => {
+		if (runtimeRole !== "lead") {
+			return toResult(
+				"mode_set_request may only originate from the lead session.",
+				{ to: target, delivered: "error", message_type: "mode_set_request" },
+				true,
+			);
+		}
+		if (isBroadcastTarget(target)) {
+			return toResult(
+				"Structured mode messages cannot be broadcast.",
+				{ to: target, delivered: "error", message_type: "mode_set_request" },
+				true,
+			);
+		}
+		if (!options.teamManager) {
+			return toResult(
+				"mode_set_request is unavailable because team state is not configured in this runtime.",
+				{ to: target, delivered: "error", message_type: "mode_set_request" },
+				true,
+			);
+		}
+		const resolved = resolveAgent(target);
+		if (resolved.error) return resolved.error;
+		const agent = resolved.agent!;
+		const label = agent.name ?? agent.id;
+		if (agent.runtimeRole !== "teammate" || !agent.teamMetadata?.teamName) {
+			return toResult(
+				`Agent "${label}" is not a named teammate and cannot accept mode updates.`,
+				{ to: label, delivered: "error", message_type: "mode_set_request" },
+				true,
+			);
+		}
+		let normalizedMode: string;
+		try {
+			normalizedMode = normalizeRequestedMode(payload.mode);
+		} catch (error) {
+			return toResult(
+				error instanceof Error ? error.message : String(error),
+				{ to: label, delivered: "error", message_type: "mode_set_request" },
+				true,
+			);
+		}
+		try {
+			const updated = options.teamManager.setTeammateModeForAgent(agent.id, normalizedMode);
+			const { lifecycle } = resolveLifecycle(agent);
+			if (lifecycle.canQueueFollowUp) {
+				const recipient = agent.teamMetadata.teammateName || agent.name || agent.id;
+				const queued = queueMailboxMessage(agent.teamMetadata.teamName, recipient, {
+					from: "lead",
+					payload: {
+						type: "plain_text",
+						text: `Lead set teammate mode to \"${normalizedMode}\". Use this mode for subsequent work.`,
+						summary: `mode_set_request: ${normalizedMode}`,
+					},
+				}, label, {
+					to: label,
+					delivered: "queued",
+					message_type: "mode_set_request",
+					mode: normalizedMode,
+				}, agent.id);
+				if (queued.isError) return queued;
+			}
+			return toResult(
+				`Set mode for "${label}" to "${updated.mode ?? normalizedMode}"`,
+				{ to: label, delivered: "handled", message_type: "mode_set_request", mode: updated.mode ?? normalizedMode },
+			);
+		} catch (error) {
+			return toResult(
+				error instanceof Error ? error.message : String(error),
+				{ to: label, delivered: "error", message_type: "mode_set_request", mode: normalizedMode },
 				true,
 			);
 		}
@@ -349,16 +552,40 @@ export function createSendMessageTool(
 
 		try {
 			options.teamManager.validateCurrentTeammateShutdownRequest(requestId);
-			emitControlMessage({
-				type: "shutdown_response",
-				requestId,
-				approve: payload.approve,
-				reason,
+			const identity = options.teamManager.getCurrentTeammateIdentity();
+			if (!identity) {
+				throw new Error("Teammate runtime is missing team identity for shutdown_response mailbox routing.");
+			}
+			const queued = queueMailboxMessage(identity.teamName, "lead", {
+				from: identity.teammateName,
+				payload: {
+					type: "shutdown_response",
+					requestId,
+					approve: payload.approve,
+					reason,
+				},
+			}, "lead", {
+				to: "lead",
+				delivered: "handled",
+				message_type: "shutdown_response",
+				request_id: requestId,
+				approved: payload.approve,
 			});
+			if (queued.isError) {
+				return queued;
+			}
+			if (!payload.approve) {
+				emitControlMessage({
+					type: "shutdown_response",
+					requestId,
+					approve: false,
+					reason,
+				});
+			}
 			return toResult(
 				payload.approve
-					? "Sent graceful shutdown approval to the lead."
-					: `Sent graceful shutdown rejection to the lead: ${reason}`,
+					? "Sent graceful shutdown approval to the lead inbox."
+					: `Sent graceful shutdown rejection to the lead inbox: ${reason}`,
 				{ to: "lead", delivered: "handled", message_type: "shutdown_response", request_id: requestId, approved: payload.approve },
 			);
 		} catch (error) {
@@ -387,6 +614,9 @@ export function createSendMessageTool(
 			}
 			if (payload.type === "shutdown_request") {
 				return handleShutdownRequest(target, params.summary);
+			}
+			if (payload.type === "mode_set_request") {
+				return handleModeSetRequest(target, payload);
 			}
 			return handleShutdownResponse(target, payload, params.summary);
 		},

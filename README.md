@@ -1,15 +1,15 @@
 # pi-teams
 
-Pi team orchestration extension for named teammates, shared task boards, raw worker delegation, chains, parallel execution, and async support.
+Pi team orchestration extension for named teammates, shared task boards, and coordinated execution.
 
-Forked from `pi-subagents`, then reshaped around a team-first workflow: lead sessions create one active team, spawn named teammates, coordinate through a shared task board, and synthesize results from automatic teammate notifications.
+Forked from `pi-subagents`, then reshaped around a team-first workflow: lead sessions create one active team, spawn named teammates, coordinate through a shared task board, inspect everything through one `/team` surface, and synthesize results from automatic teammate notifications.
 
 **What pi-teams is for**
 - named teammates inside one lead-managed team
 - shared mutable task boards, not private lead bookkeeping
 - teammate continuation, both while running and after completion when a saved session exists
 - notification-first coordination, with inspection tools as secondary support
-- raw worker plumbing still available for advanced execution paths
+- advanced execution paths still available through the low-level `team` tool
 
 ## Installation
 
@@ -44,7 +44,7 @@ Direct `npm publish` is blocked by `prepublishOnly` unless `PI_TEAMS_RELEASE_SCR
 
 ## Team-first workflow
 
-Lead sessions use the coordinator prompt by default. Start with the first-class team and task tools. Use the low-level `team` worker tool only when you intentionally want raw worker control.
+Lead sessions use the coordinator prompt by default. Start with the first-class team and task tools. Use the low-level `team` execution tool only when you intentionally want lower-level control.
 
 ### Primary lead tools
 
@@ -54,35 +54,38 @@ Lead sessions use the coordinator prompt by default. Start with the first-class 
 | `spawn_teammate` | Launch a named teammate inside that team |
 | `check_teammate` | Inspect teammate status and last summary |
 | `team_shutdown` | Stop the active team |
-| `team_delete` | Physically delete the current lead team after teammates stop |
+| `team_delete` | Physically delete the current lead team once non-lead teammates are no longer active |
 | `task_create` / `task_list` / `task_read` / `task_update` | Manage the shared task board |
 
-### Advanced worker tools
+### Advanced execution tools
 
 | Tool | Purpose |
 |------|--------|
-| `team` | Low-level worker execution for single, chain, and parallel runs |
-| `team_status` | Inspect async raw worker runs |
+| `team` | Low-level execution for single, chain, and parallel runs |
 | `send_message` | Follow up with a running teammate, or resume an idle teammate that still has a session |
-| `task_stop` | Stop a running teammate or worker |
+| `task_stop` | Stop a running teammate or low-level execution |
 
 > After `team_create`, follow-up team and task tools can omit `team_name`. They resolve against the current team automatically.
 >
-> `team_shutdown` stops teammates and marks the team shutdown. `team_delete` is the final physical cleanup step.
+> `team_shutdown` stops teammates, marks the team shutdown, and releases owned open work back to the shared board. `team_delete` is the final physical cleanup step. It fails while non-lead teammates are still active, can succeed without prior shutdown when nobody is active, and is a successful no-op when there is no current team.
 >
-> Plain-text `send_message` follow-ups now require a non-empty `summary`.
+> `check_teammate` exposes lifecycle fields for coordinator decisions: `mode`, `status`, `activity`, `is_active`, `state`, and follow-up/resume details including `addressable`, `can_resume`, `can_queue_follow_up`, and `continuation`. Running teammates can become `idle` between turns. Idle teammates with a saved session can be resumed. Shutdown and orphaned teams are non-addressable.
+>
+> Plain-text `send_message` follow-ups require a non-empty `summary`.
 >
 > Graceful shutdown uses `send_message` structured payloads. The lead sends `message: { type: "shutdown_request" }`, then the teammate replies with `to: "lead"` and `message: { type: "shutdown_response", request_id, approve, reason? }`.
 >
-> `task_update` is shared board state. Leads can edit any task. Teammates can claim and complete their own tasks.
+> Team messaging is durable across running and resumable teammates. The lead runtime polls teammate message state roughly once per second to route follow-ups and process shutdown responses.
+>
+> `task_update` is shared board state. Leads can edit any task. Teammates can claim and complete their own tasks. Leads can also set task dependencies with `depends_on` (array of task IDs). Dependent tasks remain blocked until prerequisites are completed, and teammates cannot edit dependencies or delete tasks they do not own.
 
 ### User says
 
 ```text
 Create a team with 3 teammates to review this repo:
-- architecture on Claude Sonnet
+- architecture on GPT-5.3 Codex
 - testing on Codex
-- docs on Haiku
+- docs on the default model
 Create tasks for each area, wait for them to finish, then synthesize the results.
 ```
 
@@ -92,14 +95,14 @@ Create tasks for each area, wait for them to finish, then synthesize the results
 team_create({
   team_name: "repo-review",
   description: "Review pi-teams for architecture, tests, and docs",
-  default_model: "anthropic/claude-haiku-4-5"
+  default_model: "openai/gpt-5.3-codex"
 })
 
 spawn_teammate({
   name: "architecture",
   prompt: "Review repository architecture and identify structural risks.",
   cwd: "/home/vadim/Code/pi-teams",
-  model: "anthropic/claude-sonnet-4-6"
+  model: "openai/gpt-5.3-codex"
 })
 
 spawn_teammate({
@@ -139,10 +142,20 @@ task_create({
 ### Operator command
 
 ```text
+/team
 /team repo-review
-/workers
+/team --detail architecture
+/team --detail architecture --full-prompt
 /stop-all
 ```
+
+`/team` is the single operator surface for team inspection. The roster shows teammate count, compact state badges, and the latest meaningful activity. Use `--detail <name>` for teammate detail (mode, model, cwd, owned tasks, latest activity, availability, and the latest prompt or summary), and add `--full-prompt` to expand long text.
+
+The lead TUI also shows a live teammate spinner widget (`Team live`) for the currently relevant teammates. It shows current task, current tool, and recent output in real time, and it is not a separate async/history surface.
+
+Mode sync is available through structured messaging, for example:
+`send_message({ to: "docs", message: { type: "mode_set_request", mode: "plan" } })`
+(valid modes: `default`, `plan`, `execute`). Mode changes persist and are reflected in both `/team` and `check_teammate`.
 
 Use `default_model` on `team_create` for the team-wide fallback. Override `model` per teammate only when one role needs something different.
 
@@ -150,6 +163,10 @@ Model resolution order is:
 1. `spawn_teammate({ model })`
 2. the team's `default_model`
 3. the spawned agent's own default model
+
+Skill inheritance for teammates:
+- If the lead session was started with `--skills` and/or `--no-skills`, teammate workers inherit those parent skill flags by default.
+- If an explicit agent/team skill override is provided for a worker run, that override takes precedence.
 
 If you want predictable provider usage, set `default_model` explicitly to a provider and model you already have access to.
 
@@ -324,17 +341,9 @@ Append `[key=value,...]` to any agent name to override its defaults:
 
 Set `output=false`, `reads=false`, or `skills=false` to explicitly disable.
 
-### Background Execution
+### Execution Mode
 
-Add `--bg` at the end of any slash command to run in the background:
-
-```
-/run scout "full security audit of the codebase" --bg
-/chain scout "analyze auth system" -> planner "design refactor plan" -> worker --bg
-/parallel scout "scan frontend" -> scout "scan backend" -> scout "scan infra" --bg
-```
-
-Without `--bg`, the run is foreground: the tool call stays active and streams progress until completion. With `--bg`, the run is launched asynchronously: control returns immediately, and completion arrives later via notification. In both cases workers run as separate processes. Check status with `team_status`.
+All slash commands run in foreground. This keeps the UI stable, with one live team surface.
 
 ### Forked Context Execution
 
@@ -346,12 +355,7 @@ Add `--fork` at the end of `/run`, `/chain`, or `/parallel` to run with `context
 /parallel scout "audit frontend" -> reviewer "audit backend" --fork
 ```
 
-You can combine `--fork` and `--bg` in any order:
-
-```
-/run reviewer "review this diff" --fork --bg
-/run reviewer "review this diff" --bg --fork
-```
+Use `--fork` when you want child runs to start from a branched session based on the parent leaf.
 
 ## Agents Manager
 
@@ -452,21 +456,17 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 - **Output Truncation**: Configurable byte/line limits via `maxOutput`
 - **Debug Artifacts**: Input/output/JSONL/metadata files per task
 - **Session Logs**: JSONL session files with paths shown in output
-- **Async Status Files**: Durable `status.json`, `events.jsonl`, and markdown logs for async runs
-- **Async Widget**: Lightweight TUI widget shows background run progress
-- **Session-scoped Notifications**: Async completions only notify the originating session
+- **Session-scoped Notifications**: Team completions notify the originating session
 
 ## Modes
 
-| Mode | Async Support | Notes |
-|------|---------------|-------|
-| Single | Yes | `{ agent, task }` - agents with `output` write to temp dir |
-| Chain | Yes | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables |
-| Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
+| Mode | Notes |
+|------|-------|
+| Single | `{ agent, task }` - agents with `output` write to temp dir |
+| Chain | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables |
+| Parallel | `{ tasks: [{agent, task}...] }` |
 
 Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Set `context: "fork"` to start each child from a real branched session created from the parent's current leaf.
-
-All modes support foreground and background execution. Foreground is the default (the call waits and streams progress). For programmatic background launch, use `clarify: false, async: true`. For interactive background launch, use `clarify: true` and press `b` in the TUI before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
 
 **Clarify TUI for single/parallel:**
 
@@ -483,14 +483,13 @@ Single and parallel modes also support the clarify TUI for previewing/editing pa
 **Clarification TUI keybindings:**
 
 *Navigation mode:*
-- `Enter` - Run (foreground) or launch in background if `b` is toggled on
+- `Enter` - Run
 - `Esc` - Cancel
 - `↑↓` - Navigate between steps/tasks (parallel, chain)
 - `e` - Edit task/template (all modes)
 - `m` - Select model (all modes)
 - `t` - Select thinking level (all modes)
 - `s` - Select skills (all modes)
-- `b` - Toggle background/async execution (all modes) — shows `[b]g:ON` when enabled
 - `w` - Edit writes/output file (single, chain only)
 - `r` - Edit reads list (chain only)
 - `p` - Toggle progress tracking (chain only)
@@ -603,8 +602,8 @@ These are the parameters the **LLM agent** passes when it calls the `team` tool,
   { agent: "planner", task: "Plan from {previous}" }
 ], context: "fork" }
 
-// Chain without TUI (enables async)
-{ chain: [...], clarify: false, async: true }
+// Chain without TUI
+{ chain: [...], clarify: false }
 
 // Chain with behavior overrides
 { chain: [
@@ -632,7 +631,7 @@ These are the parameters the **LLM agent** passes when it calls the `team` tool,
   ], concurrency: 2, failFast: true }  // limit concurrency, stop on first failure
 ]}
 
-// Async chain with parallel step (runs in background)
+// Chain with parallel step
 { chain: [
   { agent: "scout", task: "Gather context" },
   { parallel: [
@@ -640,13 +639,7 @@ These are the parameters the **LLM agent** passes when it calls the `team` tool,
     { agent: "worker", task: "Implement feature B based on {previous}" }
   ]},
   { agent: "reviewer", task: "Review all changes from {previous}" }
-], clarify: false, async: true }
-```
-
-**team_status tool:**
-```typescript
-{ id: "a53ebe46" }
-{ dir: "<tmpdir>/pi-async-team-runs/a53ebe46-..." }
+], clarify: false }
 ```
 
 ## Management Actions
@@ -728,7 +721,6 @@ Notes:
 | `chainDir` | string | `<tmpdir>/pi-chain-runs/` | Persistent directory for chain artifacts (default auto-cleaned after 24h) |
 | `clarify` | boolean | true (chains) | Show TUI to preview/edit chain; implies sync mode |
 | `agentScope` | `"user" \| "project" \| "both"` | `both` | Agent discovery scope (project wins on name collisions) |
-| `async` | boolean | false | Background execution (requires `clarify: false` for chains) |
 | `cwd` | string | - | Override working directory |
 | `maxOutput` | `{bytes?, lines?}` | 200KB, 5000 lines | Truncation limits for final output |
 | `artifacts` | boolean | true | Write debug artifacts |
@@ -774,12 +766,6 @@ Notes:
 | `skill` | `string \| string[] \| false` | agent default | Override skills or disable all |
 | `model` | string | agent default | Override model for this task |
 
-Status tool:
-
-| Tool | Description |
-|------|-------------|
-| `team_status` | Inspect async run status by id or dir |
-
 ## Chain Variables
 
 Templates support three variables:
@@ -822,6 +808,16 @@ Session root resolution follows this precedence:
 3. Derived from parent session (stored alongside parent session file)
 
 Sessions are always enabled, every worker run gets a session directory for tracking.
+
+### `orphanCleanupMaxAgeHours`
+
+`orphanCleanupMaxAgeHours` controls startup cleanup for stale orphaned team directories. Teams in `orphaned` state older than this threshold are removed on lead-session startup/switch/branch. Active teams are never removed.
+
+```json
+{
+  "orphanCleanupMaxAgeHours": 72
+}
+```
 
 ## Chain Directory
 Each chain run creates `<tmpdir>/pi-chain-runs/{runId}/` containing:
@@ -905,28 +901,9 @@ export PI_TEAM_MAX_DEPTH=0   # disable worker delegation entirely
 
 `PI_TEAM_DEPTH` is an internal variable propagated automatically to child processes -- don't set it manually.
 
-## Async observability
-
-Async runs write a dedicated observability folder:
-
-```
-<tmpdir>/pi-async-team-runs/<id>/
-  status.json
-  events.jsonl
-  team-log-<id>.md
-```
-
-`status.json` is the source of truth for async progress and powers the TUI widget. If you already use
-`/status <id>` you can keep doing that; otherwise use:
-
-```typescript
-team_status({ id: "<id>" })
-team_status({ dir: "<tmpdir>/pi-async-team-runs/<id>" })
-```
-
 ## Events
 
-Async events:
+Lifecycle events:
 - `team:started`
 - `team:complete`
 
@@ -942,19 +919,17 @@ Async events:
 ├── chain-clarify.ts              # TUI for chain/single/parallel clarification
 ├── chain-execution.ts            # Chain orchestration (sequential + parallel)
 ├── chain-serializer.ts           # Parse/serialize .chain.md files
-├── async-execution.ts            # Async/background execution support
 ├── execution.ts                  # Core runSync, applyThinkingSuffix
 ├── render.ts                     # TUI rendering (widget, tool result display)
 ├── artifacts.ts                  # Artifact management
 ├── formatters.ts                 # Output formatting utilities
 ├── schemas.ts                    # TypeBox parameter schemas
-├── utils.ts                      # Shared utility functions (mapConcurrent, readStatus, etc.)
+├── utils.ts                      # Shared utility functions
 ├── types.ts                      # Shared types and constants
-├── team-runner.ts            # Async runner (detached process)
-├── parallel-utils.ts             # Parallel execution utilities for async runner
+├── parallel-utils.ts             # Parallel execution utilities
 ├── pi-spawn.ts                   # Cross-platform pi CLI spawning
 ├── single-output.ts              # Solo agent output file handling
-├── notify.ts                     # Async completion notifications
+├── notify.ts                     # Completion notifications
 ├── completion-dedupe.ts          # Completion deduplication for notifications
 ├── file-coalescer.ts             # Debounced file write coalescing
 ├── jsonl-writer.ts               # JSONL event stream writer

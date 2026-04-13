@@ -41,7 +41,7 @@ describe("AgentRegistry event integration", { skip: !available ? "modules not av
 	});
 
 	it("team:started event shape populates registry", () => {
-		// Simulate the event data shape emitted by async-execution.ts
+		// Simulate the event data shape emitted by the team execution runtime
 		const startedData = {
 			id: "run-abc123",
 			agent: "researcher",

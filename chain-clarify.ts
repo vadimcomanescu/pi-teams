@@ -42,8 +42,6 @@ export interface ChainClarifyResult {
 	templates: string[];
 	/** User-modified behavior overrides per step (undefined = no changes) */
 	behaviorOverrides: (BehaviorOverride | undefined)[];
-	/** User requested background/async execution */
-	runInBackground?: boolean;
 }
 
 type EditMode = "template" | "output" | "reads" | "model" | "thinking" | "skills";
@@ -90,8 +88,6 @@ export class ChainClarifyComponent implements Component {
 	private saveMessageTimer: ReturnType<typeof setTimeout> | null = null;
 	private saveChainNameState: TextEditorState = createEditorState();
 	private savingChain = false;
-	/** Run in background (async) mode */
-	private runInBackground = false;
 
 	constructor(
 		private tui: TUI,
@@ -467,7 +463,7 @@ export class ChainClarifyComponent implements Component {
 			for (let i = 0; i < this.agentConfigs.length; i++) {
 				overrides.push(this.behaviorOverrides.get(i));
 			}
-			this.done({ confirmed: true, templates: this.templates, behaviorOverrides: overrides, runInBackground: this.runInBackground });
+			this.done({ confirmed: true, templates: this.templates, behaviorOverrides: overrides });
 			return;
 		}
 
@@ -539,13 +535,6 @@ export class ChainClarifyComponent implements Component {
 			for (let i = 0; i < this.agentConfigs.length; i++) {
 				this.updateBehavior(i, "progress", newState);
 			}
-			this.tui.requestRender();
-			return;
-		}
-
-		// 'b' to toggle background/async execution (all modes)
-		if (data === "b") {
-			this.runInBackground = !this.runInBackground;
 			this.tui.requestRender();
 			return;
 		}
@@ -1190,14 +1179,13 @@ export class ChainClarifyComponent implements Component {
 
 	/** Get footer text based on mode */
 	private getFooterText(): string {
-		const bgLabel = this.runInBackground ? '[b]g:ON' : '[b]g';
 		switch (this.mode) {
 			case 'single':
-				return ` [Enter] Run • [Esc] Cancel • e m t w s ${bgLabel} S `;
+				return " [Enter] Run • [Esc] Cancel • e m t w s S ";
 			case 'parallel':
-				return ` [Enter] Run • [Esc] Cancel • e m t s ${bgLabel} S • ↑↓ Nav `;
+				return " [Enter] Run • [Esc] Cancel • e m t s S • ↑↓ Nav ";
 			case 'chain':
-				return ` [Enter] Run • [Esc] Cancel • e m t w r p s ${bgLabel} S W • ↑↓ Nav `;
+				return " [Enter] Run • [Esc] Cancel • e m t w r p s S W • ↑↓ Nav ";
 		}
 	}
 

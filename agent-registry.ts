@@ -36,6 +36,12 @@ export interface RegisteredAgent {
 	model?: string;
 	runtimeRole?: RuntimeRole;
 	teamMetadata?: TeammateRuntimeMetadata;
+	currentTool?: string;
+	recentOutput?: string[];
+	toolCount?: number;
+	tokens?: number;
+	durationMs?: number;
+	lastUpdateAt?: number;
 }
 
 export type AgentStatus = RegisteredAgent["status"];
@@ -267,7 +273,8 @@ export class AgentRegistry {
 		this.timeoutSweepInterval = setInterval(() => {
 			const now = Date.now();
 			for (const agent of this.getRunning()) {
-				if (now - agent.startTime > timeoutMs) {
+				const lastActivityAt = agent.lastUpdateAt ?? agent.startTime;
+				if (now - lastActivityAt > timeoutMs) {
 					this.killAgent(agent.id);
 					this.updateStatus(agent.id, "timed_out");
 					this.onTimeout?.(agent);

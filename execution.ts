@@ -31,7 +31,7 @@ import {
 import { buildSkillInjection, resolveSkills } from "./skills.js";
 import { getPiSpawnCommand } from "./pi-spawn.js";
 import { createJsonlWriter } from "./jsonl-writer.js";
-import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "./pi-args.js";
+import { applyThinkingSuffix, buildPiArgs, cleanupTempDir, getParentSkillCliOptions } from "./pi-args.js";
 
 /**
  * Run a team synchronously (blocking until complete)
@@ -63,6 +63,8 @@ export async function runSync(
 	const modelArg = applyThinkingSuffix(effectiveModel, agent.thinking);
 
 	const skillNames = options.skills ?? agent.skills ?? [];
+	const hasExplicitSkillOverride = skillNames.length > 0;
+	const inheritedSkillCli = hasExplicitSkillOverride ? { noSkills: false, skillPaths: [] } : getParentSkillCliOptions();
 	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkills(skillNames, runtimeCwd);
 
 	let systemPrompt = agent.systemPrompt?.trim() || "";
@@ -87,6 +89,8 @@ export async function runSync(
 		tools: agent.tools,
 		extensions: agent.extensions,
 		skills: skillNames,
+		inheritNoSkills: inheritedSkillCli.noSkills,
+		inheritedSkillPaths: inheritedSkillCli.skillPaths,
 		systemPrompt,
 		mcpDirectTools: agent.mcpDirectTools,
 		promptFileStem: agent.name,
@@ -272,8 +276,11 @@ export async function runSync(
 							}
 						}
 
+						const stopReason = (evt.message as { stopReason?: string }).stopReason;
+						if (isRpc && !suppressAutoExitForFinalAssistant && (stopReason === "stop" || stopReason === "error")) {
+							options.onTeammateIdle?.(text);
+						}
 						if (isRpc && options.exitAfterFinalAssistantMessage && !exitAfterFinalTriggered && !suppressAutoExitForFinalAssistant) {
-							const stopReason = (evt.message as { stopReason?: string }).stopReason;
 							if (stopReason === "stop" || stopReason === "error") {
 								exitAfterFinalTriggered = true;
 								try {

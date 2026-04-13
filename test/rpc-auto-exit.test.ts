@@ -176,6 +176,7 @@ describe("RPC one-shot teammate mode", { skip: !available ? "execution.ts not im
 		restoreShim = installRpcRejectedShutdownShim(tempDir);
 		const agents = makeAgentConfigs(["worker"]);
 		const controlMessages: unknown[] = [];
+		const idleSummaries: string[] = [];
 
 		const startedAt = Date.now();
 		const result = await runSync(tempDir, agents, "worker", "Respond to shutdown", {
@@ -185,12 +186,16 @@ describe("RPC one-shot teammate mode", { skip: !available ? "execution.ts not im
 			onTeammateControlMessage: (message) => {
 				controlMessages.push(message);
 			},
+			onTeammateIdle: (summary) => {
+				if (summary) idleSummaries.push(summary);
+			},
 		});
 		const durationMs = Date.now() - startedAt;
 
 		assert.equal(result.exitCode, 0);
 		assert.equal(getFinalOutput(result.messages), "rejection sent");
 		assert.deepEqual(controlMessages, [{ type: "shutdown_response", requestId: "req-1", approve: false, reason: "still working" }]);
+		assert.deepEqual(idleSummaries, []);
 		assert.ok(durationMs >= 3_000, `expected rejected shutdown to keep teammate alive, got ${durationMs}ms`);
 	});
 });

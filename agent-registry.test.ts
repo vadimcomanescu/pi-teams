@@ -226,6 +226,22 @@ describe("AgentRegistry", () => {
 			assert.deepEqual(timedOut, ["a1"]);
 		});
 
+		it("uses inactivity time instead of start time for timeout decisions", async () => {
+			const timedOut: string[] = [];
+			registry.register(makeAgent({
+				id: "active-1",
+				startTime: Date.now() - 60_000,
+				lastUpdateAt: Date.now(),
+			}));
+			registry.startTimeoutSweeper(5_000, 50, (agent) => timedOut.push(agent.id));
+
+			await new Promise((r) => setTimeout(r, 120));
+			registry.stopTimeoutSweeper();
+
+			assert.equal(registry.resolve("active-1")!.status, "running");
+			assert.deepEqual(timedOut, []);
+		});
+
 		it("escalates timed-out RPC workers to SIGKILL when they ignore SIGTERM", async () => {
 			const killSignals: string[] = [];
 			const writes: string[] = [];

@@ -84,11 +84,6 @@ export interface ChainExecutionResult {
 	content: Array<{ type: "text"; text: string }>;
 	details: Details;
 	isError?: boolean;
-	/** User requested async execution via TUI - caller should dispatch to executeAsyncChain */
-	requestedAsync?: {
-		chain: ChainStep[];
-		chainSkills: string[];
-	};
 }
 
 /**
@@ -215,30 +210,6 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			return {
 				content: [{ type: "text", text: "Chain cancelled" }],
 				details: { mode: "chain", results: [] },
-			};
-		}
-
-		// User requested background execution - return early so caller can dispatch to async
-		if (result.runInBackground) {
-			removeChainDir(chainDir); // Will be recreated by async runner
-			// Apply TUI edits (templates + behavior overrides) to chain steps
-			const updatedChain = chainSteps.map((step, i) => {
-				if (isParallelStep(step)) return step; // Parallel steps unchanged (TUI skipped for parallel chains)
-				const override = result.behaviorOverrides[i];
-				return {
-					...step,
-					task: result.templates[i] as string, // Always use edited template
-					...(override?.model ? { model: override.model } : {}),
-					...(override?.output !== undefined ? { output: override.output } : {}),
-					...(override?.reads !== undefined ? { reads: override.reads } : {}),
-					...(override?.progress !== undefined ? { progress: override.progress } : {}),
-					...(override?.skills !== undefined ? { skill: override.skills } : {}),
-				};
-			});
-			return {
-				content: [{ type: "text", text: "Launching in background..." }],
-				details: { mode: "chain", results: [] },
-				requestedAsync: { chain: updatedChain as ChainStep[], chainSkills },
 			};
 		}
 

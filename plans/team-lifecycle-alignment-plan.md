@@ -1,12 +1,20 @@
-# Claude Team Lifecycle Parity Plan (pi-teams)
+# Team Lifecycle Alignment Plan (pi-teams)
 
 ## Goal
-Bring `pi-teams` team lifecycle behavior as close as possible to Claude Code team lifecycle behavior, without adding unrelated abstractions.
+Bring `pi-teams` team lifecycle behavior as close as possible to the reference implementation team lifecycle behavior, without adding unrelated abstractions.
 
-Primary parity target:
+Primary alignment target:
 - Explicit team creation and controlled teammate spawn
 - **Fundamental lifecycle guarantees**: auto-disband/cleanup, graceful shutdown semantics, resilient task ownership
 - Reliable lead/teammate coordination state
+
+## Current status
+As of 2026-04-13, the current team contract is in good shape for release:
+- one `/team` operator surface
+- live teammate activity visible in roster, detail, and compact widget surfaces
+- inbox-backed teammate messaging and graceful shutdown flow working
+- shutdown/delete semantics separated cleanly
+- residual work is polish and extra hardening, not a known blocker
 
 ## Scope
 This plan focuses on lifecycle + coordination parity and the minimum operator-facing visibility needed to make that lifecycle trustworthy. It does not stop at backend cleanup alone. If a lead cannot clearly see teammate state, current work, and shutdown/disband status in the TUI, the lifecycle work is incomplete.
@@ -95,7 +103,6 @@ Use these Claude files/symbols as the primary design reference when implementing
 - **PR6 TUI visibility and progress parity**
   - `src/components/teams/TeamsDialog.tsx` (team roster/status rendering)
   - `src/components/Spinner/TeammateSpinnerLine.tsx` (compact teammate state rendering)
-  - `src/hooks/useBackgroundTaskNavigation.ts` (teammate navigation/view behavior)
 
 - **PR7 Orphan cleanup policy**
   - `src/utils/swarm/teamHelpers.ts` (`cleanupSessionTeams`, pane cleanup, directory cleanup)
@@ -168,17 +175,26 @@ Canonical naming decisions for parity work:
 
 | Order | PR | Must pass before next PR |
 |---|---|---|
-| 1 | PR1 Team Delete, done | delete tests + no regressions in existing team create/spawn/shutdown flows |
-| 2 | PR2 Session Cleanup, done | PR1 stable in manual run + shutdown cleanup tests green |
-| 3 | PR3 Task Unassign, done | timeout/stop integration verified with registry hooks |
-| 4 | PR4 Graceful Shutdown | protocol tests green + no breakage to plain send_message follow-up path |
-| 5 | PR5 Idle/Active State | check_teammate output contract frozen and documented |
-| 6 | PR6 TUI Visibility | teammate state/progress rendering tests green |
-| 7 | PR7 Orphan Cleanup | dry-run safety and active-team preservation tests green |
-| 8 | PR8 Mode Sync | invalid update protections tested |
-| 9 | PR9 Task Dependencies | dependency mutation tests and blocked-task behavior tests green |
+| 1 | PR1 Team Delete, done done | delete tests + no regressions in existing team create/spawn/shutdown flows |
+| 2 | PR2 Session Cleanup, done done | PR1 stable in manual run + shutdown cleanup tests green |
+| 3 | PR3 Task Unassign, done done | timeout/stop integration verified with registry hooks |
+| 4 | PR4 Graceful Shutdown, done done | protocol tests green + no breakage to plain send_message follow-up path |
+| 5 | PR5 Idle/Active State, done done | check_teammate output contract frozen and documented |
+| 6 | PR6 TUI Visibility, done done (scoped) | teammate state/progress rendering tests green |
+| 7 | PR7 Orphan Cleanup, done done | dry-run safety and active-team preservation tests green |
+| 8 | PR8 Mode Sync, done done | invalid update protections tested |
+| 9 | PR9 Task Dependencies, done done | dependency mutation tests and blocked-task behavior tests green |
 
 Hard rule: do not start PR4 before PR3 lands, because shutdown-approval semantics must reuse the unassignment path.
+
+### Phase B Execution Order (strict one-to-one parity)
+
+| Order | PR | Status | Gate |
+|---|---|---|---|
+| 10 | PR10 `team_delete` semantic alignment | done done | remove shutdown prerequisite, keep active-member refusal |
+| 11 | PR11 spinner/tree parity | done done | leader row + selection/stats/idle semantics tests green |
+| 12 | PR13 roster/detail control parity | done done | list/detail behavior parity tests green and unwired interaction hints removed |
+| 13 | PR14 send_message mailbox/inbox parity | done done | mailbox routing + inbox poller + messaging parity tests green |
 
 ### P0 Parity Freeze (must match Claude semantics)
 For PR1-PR5, implementation choices are constrained:
@@ -194,7 +210,7 @@ Any deviation requires explicit written exception in the PR description.
 
 ---
 
-## PR1 - Team Delete + Full Physical Cleanup (P0) [done]
+## PR1 - Team Delete + Full Physical Cleanup (P0) [done done]
 
 ### Problem class
 Teams can be logically shut down but persist physically, causing drift and stale state.
@@ -238,7 +254,7 @@ Add tests that fail if team delete drifts from Claude semantics:
 
 ---
 
-## PR2 - Session-Created Team Registry + Auto Cleanup on Shutdown (P0) [done]
+## PR2 - Session-Created Team Registry + Auto Cleanup on Shutdown (P0) [done done]
 
 ### Problem class
 Interrupted sessions leak teams and artifacts indefinitely.
@@ -284,7 +300,7 @@ Add tests:
 
 ---
 
-## PR3 - Auto-Unassign Tasks on Teammate Stop/Timeout/Shutdown (P0) [done]
+## PR3 - Auto-Unassign Tasks on Teammate Stop/Timeout/Shutdown (P0) [done done]
 
 ### Problem class
 Task board stalls when dead teammates retain ownership.
@@ -314,7 +330,7 @@ Add tests:
 
 ---
 
-## PR4 - Graceful Shutdown Protocol (Request / Approve / Reject) (P0) [done]
+## PR4 - Graceful Shutdown Protocol (Request / Approve / Reject) (P0) [done done]
 
 ### Problem class
 Hard-stop only semantics lose work context and diverge from Claude behavior.
@@ -359,7 +375,7 @@ Add tests:
 
 ---
 
-## PR5 - Explicit Idle/Active State Tracking (P0)
+## PR5 - Explicit Idle/Active State Tracking (P0) [done done]
 
 ### Problem class
 Lifecycle checks cannot distinguish “running work” from “idle but resumable.”
@@ -390,10 +406,12 @@ Add tests:
 
 ---
 
-## PR6 - TUI Team Visibility and Progress Parity (P1)
+## PR6 - TUI Team Visibility and Progress Parity (P1) [done done - scoped]
 
 ### Problem class
 Lifecycle guarantees are not operationally trustworthy if the lead cannot see what teammates are doing. Claude parity here is not just “some status text exists”. It includes the concrete operator experience: a readable team roster, a focused teammate detail view, and a compact live progress view that stays useful on narrow terminals.
+
+Scope note (updated): interactive team navigation parity was removed from scope by product decision, while spinner/live-progress + teammate task/output visibility remains the parity target.
 
 ### Enforcement first
 Add tests:
@@ -419,20 +437,11 @@ Add tests:
   - awaiting-approval teammate renders a distinct approval-needed state
   - spinner line progressively hides name/hints/stats on narrow terminals without breaking layout
   - preview lines show at most the recent meaningful activity lines Claude-style, without flooding the view
-- `background-task-navigation.test.ts` or equivalent (new/updated)
-  - `shift+up/down` wraps across leader -> teammates -> hide row like Claude
-  - first selection step from collapsed state expands teammate view and parks on leader
-  - teammate selection order is stable and matches the displayed running-teammate order
-  - `enter`/`f` opens teammate-focused view
-  - `escape` from focused running teammate aborts current work only, not the whole teammate
-  - `escape` otherwise exits focused/selection view without corrupting selection state
-  - when no teammates exist but other background tasks do, the same keys fall back to the background-task surface instead of doing nothing
 
 ### Implementation
 - Mirror the Claude split between:
   - a `/team` dialog-style roster view (`TeamsDialog` parity)
   - a compact live teammate progress view (`TeammateSpinnerLine` parity)
-  - keyboard navigation that moves between leader and teammates (`useBackgroundTaskNavigation` parity)
 - Team roster/list view must show, with clear visual hierarchy:
   - team title + teammate count subtitle
   - selection pointer/highlight
@@ -483,7 +492,7 @@ Add tests:
 
 ---
 
-## PR7 - Orphan Runtime/Artifact Cleanup Policy (P1)
+## PR7 - Orphan Runtime/Artifact Cleanup Policy (P1) [done done]
 
 ### Problem class
 Long-running usage accumulates stale team directories and runtime artifacts.
@@ -507,10 +516,12 @@ Add tests:
 
 ---
 
-## PR8 - Team Permission/Mode Sync Protocol (P1)
+## PR8 - Team Permission/Mode Sync Protocol (P1) [done done]
 
 ### Problem class
 Lead cannot coordinate teammate permission/mode changes with Claude-like parity.
+
+Scope note (applied): structured mode sync and persisted mode visibility are implemented through `send_message` and `check_teammate`/`/team` surfaces. Interactive list/detail mode-cycling controls remain deferred with the broader interactive TUI parity work.
 
 ### Enforcement first
 Add tests:
@@ -536,7 +547,7 @@ Add tests:
 
 ---
 
-## PR9 - Task Dependency Parity (P1)
+## PR9 - Task Dependency Parity (P1) [done done]
 
 ### Problem class
 Claude task coordination supports richer dependency semantics. Without them, multi-step coordination can become flatter and less expressive than the target parity model.
@@ -648,7 +659,6 @@ Each PR description must include a "Proof bundle" section with:
   - live spinner/progress view renders recent activity, idle timing, stopping/approval state, and preview lines when available.
   - idle/resumable teammate is visually distinct from running teammate.
   - narrow-terminal rendering preserves readability via progressive disclosure.
-  - keyboard navigation matches Claude-style teammate selection/open/escape flows.
   - list/detail footer hints match actually implemented controls.
   - deleted team is removed from active view without stale rows.
 - Manual:
@@ -707,7 +717,7 @@ Release gate (all must be true):
 - Claude-style structured shutdown messaging is accepted through `send_message`
 - `send_message` enforces Claude plain-text `summary` requirements
 - Team TUI view shows teammate roster, detail context, and current known work/progress without stale rows after shutdown/delete
-- Team TUI remains readable and navigable on both wide and narrow terminal widths
+- Team TUI remains readable on both wide and narrow terminal widths
 - Task dependency behavior is deterministic once PR9 lands
 - Persisted teams/tasks created before these changes still load without migration failures
 - Proof bundle is present for each merged PR (tests, manual checks, tool contract diff)
@@ -738,32 +748,106 @@ Release gate (all must be true):
 
 ## Definition of Done
 
-- PR1 through PR9 are complete with tests
-- Team create/delete/shutdown + session cleanup are deterministic and proven against Claude semantics
-- `team_create` collision handling, one-team-per-lead behavior, and `send_message` plain-text summary validation all match Claude
-- Task ownership cannot stay stuck on dead teammates
-- Graceful shutdown protocol is Claude-compatible through `send_message` without invented extra state-machine or sender-correlation rules
-- `check_teammate` lifecycle output is trustworthy for coordinator decisions
-- Team TUI visibility shows teammate roster, detail context, and current known work/progress clearly enough for lead decisions
-- Team TUI interaction and visual hierarchy feel Claude-like rather than generic status dumping
-- Task dependency behavior is implemented and documented
-- Behavior and docs reflect Claude-like lifecycle expectations
-- CHANGELOG and README coordinator sections updated for new lifecycle contracts
+### Phase A (completed, done done)
+- PR1 through PR9 are complete with tests.
+- Task ownership/unassignment, shutdown protocol, timeout behavior, and core lifecycle hardening are stable.
+- `team_create` collision handling, one-team-per-lead behavior, and `send_message` plain-text summary validation are implemented.
+
+### Phase B (required for strict 1:1 Claude parity)
+- PR10, PR11, PR13, and PR14 must be complete with tests.
+- `team_delete` semantics match Claude exactly (no extra shutdown prerequisite when teammates are already inactive).
+- Team spinner/roster/detail visual behavior matches Claude one-to-one for the agreed lifecycle surfaces.
+- Remaining `send_message` parity edge cases are resolved or explicitly documented as runtime-constrained exceptions.
+- README/CHANGELOG/tool-contract docs are updated to reflect the final parity contract.
 
 ---
 
-## Final Audit Summary
+## Final Audit Summary (updated after direct scan of `claude-code-original`)
 
-This plan has been normalized to the current `claude-code-original` reference for the lifecycle and TUI surfaces covered here.
+Status after PR1-PR9 implementation and direct source audit on 2026-04-13:
 
-Final audit outcomes locked into the plan:
-- `team_delete` now matches Claude semantics for the current active team, including refusal while non-lead teammates are active, success no-op when no active team exists, and lead-side cleanup of team context/message/color/task-binding state.
-- `team_create` now matches Claude creation behavior and shape by using `agent_type?`, generating a unique team name on collision, and refusing to create a second active team for the same lead.
-- `send_message` now matches Claude plain-text validation by requiring `summary` when `message` is a string.
-- Graceful shutdown parity now stays limited to Claude-shaped `shutdown_request` / `shutdown_response` behavior, without invented timeout, outstanding-request, or sender-correlation state machines.
-- Idle/active lifecycle parity now uses Claude-style `isActive` state only.
-- TUI parity now explicitly covers Claude roster, detail, spinner/progress, navigation, and mode-control behavior.
+### Completed baseline (done done)
+- [x] PR1-PR9 lifecycle/test hardening work is implemented and passing locally.
+- [x] Team-first contract is enforced (legacy async public surface removed).
+- [x] Timeout handling now uses inactivity (`lastUpdateAt`) instead of pure wall-clock since start.
+- [x] Progress rendering is throttled + deduped (no per-event repaint storm).
+- [x] Structured shutdown flow and task ownership unassignment matrix are covered by tests.
 
-Deferred on purpose:
-- broader mailbox/permission flows outside this lifecycle parity scope
-- plan approval UX beyond the shutdown-related parity covered here
+### Missing for strict 1:1 Claude parity (new required work)
+- [x] **PR10 - Align `team_delete` semantics exactly**
+  - Completed: removed shutdown prerequisite while preserving active non-lead teammate refusal.
+  - Updated files: `team-manager.ts`, `team-tools.ts`, `README.md`, tests in `test/team-manager.delete-team.test.ts` and `test/team-tools.integration.test.ts`.
+  - Verification: targeted lifecycle and integration suites green.
+
+- [x] **PR11 - Spinner/tree UI parity upgrade**
+  - Completed: added Claude-like leader row, selection-highlight variants, optional stats/hints rendering, and richer idle duration semantics in the live team spinner surface.
+  - Updated files: `teammate-spinner-line.ts`, `index.ts`, `team-executor.ts`, `teammate-spinner-line.test.ts`.
+  - Verification: full suite green.
+
+- [x] **PR13 - Team roster/detail parity completion**
+  - Completed: aligned `/team` roster/detail output with Claude-style naming and removed unwired interaction hints from live/status surfaces.
+  - Updated files: `slash-commands.ts`, `slash-commands.test.ts`, `teammate-spinner-line.ts`, `teammate-spinner-line.test.ts`, `index.ts`.
+  - Verification: targeted slash/spinner suites green and full suite green.
+
+
+- [x] **PR14 - Messaging surface parity review**
+  - Completed: implemented team mailbox/inbox transport for teammate messaging.
+  - `send_message` now writes lead/teammate mailbox entries for team runtimes instead of relying on direct stdin routing.
+  - Added lead inbox poller that routes teammate inbox messages to running teammates and applies shutdown responses from lead inbox.
+  - Updated files: `send-message-tool.ts`, `index.ts`, `team-manager.ts`, `teammate-mailbox.ts`, and parity tests (`test/send-message-tool.test.ts`, `test/teammate-mode-sync.test.ts`, `test/teammate-shutdown-protocol.test.ts`, `teammate-mailbox.test.ts`).
+  - Verification: targeted messaging suites green and full suite green.
+
+### Parity claim status
+- Previous over-claim on `team_delete` parity was corrected.
+- PR10 closes that gap in this revision.
+- A second direct scan of `claude-code-original` on 2026-04-13 confirmed that parity is still **not complete** despite PR14 landing.
+- Key source anchors for the remaining work:
+  - `src/components/teams/TeamsDialog.tsx`, single primary team surface, no separate `/workers`-style user surface.
+  - `src/screens/REPL.tsx` + `src/hooks/useInboxPoller.ts`, inbox polling is integrated into the main team runtime, not taught as a second operator concept.
+  - `src/components/Spinner/TeammateSpinnerTree.tsx` + `src/components/Spinner/TeammateSpinnerLine.tsx`, compact team status stays in the main team UX and does not depend on a separate async roster concept.
+  - `src/tools/SendMessageTool/SendMessageTool.ts`, mailbox/inbox transport is the real messaging path.
+
+### Residual cleanup required before any parity claim
+- [x] Remove `/workers` as a user-facing surface. Claude has one team surface, not parallel team-vs-workers inspection commands.
+- [x] Humanize `/team` task rows (remove `owner=` style syntax from user-facing output).
+- [x] Fix `/team --detail` labeling so non-prompt fallback text is not shown under `Prompt preview`.
+- [x] Align README with the actual roster output (do not claim per-row model hints unless they are shown).
+- [x] Soften compact spinner status copy where it still reads like internal state (`[awaiting approval]`, `[failed]`, `[timed out]`, `[stopped]`).
+- [x] Either explain mode glyphs in the primary surface or remove them from user-facing roster/detail output.
+- [x] Add direct regression tests for legacy async widget clearing and live-widget filtering to running teammates only.
+
+### Coordinator review policy for the next session
+- Do not launch broad repo-wide review workers.
+- Use non-Anthropic models only in this repo unless the user explicitly accepts Anthropic quota failure.
+- Any review worker must be scoped to a small file set and a single question.
+- Prefer 3 narrow reviews over 1 broad audit:
+  - wording/UI review (`slash-commands.ts`, `README.md`)
+  - live-surface review (`index.ts`, `teammate-spinner-line.ts`)
+  - enforcement review (tests + `package.json`)
+- If a review worker has not produced useful findings quickly, stop and re-scope instead of waiting for full timeout.
+
+### Manual TUI parity pass, 2026-04-13
+Executed a direct operator-surface smoke run against the actual team renderers:
+- `/team` roster via `registerSlashCommands(...)`
+- `/team --detail <name>` via `registerSlashCommands(...)`
+- live spinner widget via `buildLiveWidgetRenderState(...)` / `buildTeammateSpinnerLines(...)`
+
+Observed outcomes:
+- Wide roster/detail surfaces now show live activity, owned tasks, and user-facing availability text without raw continuation/tool-routing syntax.
+- Live activity wins over stale goal text in both roster/detail and spinner-style surfaces.
+- Narrow spinner rendering now fits a 44-column budget, drops tool/token stats first, and preserves current activity text instead of overflowing.
+- Wide spinner rendering still keeps tool/token stats when space allows.
+
+Environment note:
+- A fully provider-backed interactive `pi` session was not used for this pass because this environment does not have the required OpenAI API key for the chosen model. The smoke run still exercised the real extension renderers and command handlers directly.
+
+### Next session start point
+1. If desired, run a full provider-backed interactive `pi` session for side-by-side visual comparison against Claude.
+2. Re-run targeted suites, then `npm run test:all`.
+
+### Release gate update for “one on one”
+One-to-one parity is considered reached only after the residual cleanup above is complete, with:
+- full suite green,
+- parity-focused targeted suite green,
+- manual TUI parity pass against Claude behavior checklist,
+- no separate async/background team surface visible to the user.

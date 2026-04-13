@@ -18,6 +18,7 @@ import {
 import {
 	createTaskCreateTool,
 	createTaskListTool,
+	createTaskReadTool,
 	createTaskUpdateTool,
 } from "../task-tools.js";
 
@@ -124,8 +125,10 @@ describe("team tools integration", () => {
 		registry.updateStatus("worker-1", "completed", "Architecture looks good");
 		teamManager.recordTeammateStatus("worker-1", "completed", "Architecture looks good");
 		const checkResult = await exec(checkTeammate, { agent_name: "architecture" });
+		assert.equal(checkResult.details.mode, "default");
 		assert.equal(checkResult.details.status, "completed");
 		assert.equal(checkResult.details.activity, "idle");
+		assert.equal(checkResult.details.is_active, false);
 		assert.equal(checkResult.details.addressable, true);
 		assert.equal(checkResult.details.lastSummary, "Architecture looks good");
 
@@ -139,6 +142,39 @@ describe("team tools integration", () => {
 		assert.equal(deleted.isError, undefined);
 		assert.equal(deleted.details.team_name, "repo-review");
 		assert.equal(teamManager.getTeam("repo-review"), undefined);
+	});
+
+	it("reconciles spawn races where completion arrives before teammate registration", async () => {
+		const createTeam = createTeamCreateTool(teamManager);
+		const spawnTeammate = createSpawnTeammateTool({
+			teamManager,
+			listAssignedTasks: () => [],
+			spawnTeammate: async (request) => {
+				registry.register({
+					id: "worker-race",
+					name: request.name,
+					agentType: "worker",
+					task: request.prompt,
+					status: "running",
+					startTime: Date.now(),
+				});
+				teamManager.recordTeammateStatus("worker-race", "failed", "Spawn failed immediately");
+				return { agentId: "worker-race", effectiveModel: request.effectiveModel };
+			},
+		});
+		const checkTeammate = createCheckTeammateTool(teamManager);
+
+		await exec(createTeam, { team_name: "repo-review" });
+		const spawnResult = await exec(spawnTeammate, {
+			name: "docs",
+			prompt: "Review docs",
+			cwd: tempDir,
+		});
+		assert.equal(spawnResult.isError, undefined);
+
+		const checked = await exec(checkTeammate, { agent_name: "docs" });
+		assert.equal(checked.details.status, "failed");
+		assert.equal(checked.details.lastSummary, "Spawn failed immediately");
 	});
 
 	it("lets teammates read their own team state without repeating team_name", async () => {
@@ -218,6 +254,75 @@ describe("team tools integration", () => {
 		assert.match(listed.content[0].text, /\[completed\]/);
 	});
 
+	it("supports dependency updates and blocks dependent tasks until prerequisites complete", async () => {
+		const createTeam = createTeamCreateTool(teamManager);
+		const createTask = createTaskCreateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const updateTask = createTaskUpdateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const listTask = createTaskListTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const readTask = createTaskReadTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+
+		await exec(createTeam, { team_name: "repo-review" });
+		const prereq = await exec(createTask, { subject: "Prereq", description: "First" });
+		const dep = await exec(createTask, { subject: "Dependent", description: "Second" });
+
+		const linked = await exec(updateTask, { task_id: dep.details.id, depends_on: [prereq.details.id] });
+		assert.equal(linked.isError, undefined);
+		assert.deepEqual(linked.details.dependsOn, [prereq.details.id]);
+		assert.equal(linked.details.blocked, true);
+
+		const blockedStart = await exec(updateTask, { task_id: dep.details.id, status: "in_progress" });
+		assert.equal(blockedStart.isError, true);
+		assert.match(blockedStart.content[0].text, /blocked by unfinished dependencies/i);
+
+		const listed = await exec(listTask, {});
+		assert.match(listed.content[0].text, /\[blocked\]/);
+		assert.match(listed.content[0].text, /depends_on:/);
+
+		const readBlocked = await exec(readTask, { task_id: dep.details.id });
+		assert.match(readBlocked.content[0].text, /Blocked: yes/);
+		assert.match(readBlocked.content[0].text, /Depends on:/);
+
+		await exec(updateTask, { task_id: prereq.details.id, status: "completed" });
+		const startNow = await exec(updateTask, { task_id: dep.details.id, status: "in_progress" });
+		assert.equal(startNow.isError, undefined);
+		assert.equal(startNow.details.blocked, false);
+	});
+
+	it("prevents teammates from mutating dependency fields", async () => {
+		const createTeam = createTeamCreateTool(teamManager);
+		const createTask = createTaskCreateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+		const updateTask = createTaskUpdateTool({
+			teamManager,
+			createTaskStore: (teamName) => new TaskStore(teamName, teamManager.getTasksPath(teamName)),
+		});
+
+		await exec(createTeam, { team_name: "repo-review" });
+		const task = await exec(createTask, { subject: "Docs", description: "Docs" });
+
+		currentTeammateTeamName = "repo-review";
+		currentTeammateName = "docs";
+		sessionId = "teammate-session";
+
+		const result = await exec(updateTask, { task_id: task.details.id, depends_on: ["task-other"] });
+		assert.equal(result.isError, true);
+		assert.match(result.content[0].text, /cannot edit task dependencies/i);
+	});
+
 	it("prevents teammates from taking over or deleting another teammate's task", async () => {
 		const createTeam = createTeamCreateTool(teamManager);
 		const createTask = createTaskCreateTool({
@@ -275,6 +380,17 @@ describe("team tools integration", () => {
 		const deleted = await exec(deleteTeam, {});
 		assert.equal(deleted.isError, true);
 		assert.match(deleted.content[0].text, /non-lead teammates are active: docs/i);
+	});
+
+	it("allows team_delete without team_shutdown when no teammates are running", async () => {
+		const createTeam = createTeamCreateTool(teamManager);
+		const deleteTeam = createTeamDeleteTool(teamManager);
+
+		await exec(createTeam, { team_name: "repo-review" });
+		const deleted = await exec(deleteTeam, {});
+		assert.equal(deleted.isError, undefined);
+		assert.equal(deleted.details.noop, false);
+		assert.equal(deleted.details.team_name, "repo-review");
 	});
 
 	it("returns a successful no-op when team_delete has nothing to delete", async () => {

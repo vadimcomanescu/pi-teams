@@ -44,24 +44,23 @@ describe("extension loading", { skip: !available ? "pi-test-harness not availabl
 		assert.ok(!results[0].isError, "should not be an error");
 	});
 
-	it("team_status tool responds", async () => {
+	it("rejects legacy async parameter on team tool", async () => {
 		t = await createTestSession({
 			extensions: [EXTENSION],
 			mockTools: { bash: "ok", read: "ok", write: "ok", edit: "ok" },
 		});
 
 		await t.run(
-			when("Check status", [
-				calls("team_status", { id: "nonexistent" }),
-				says("Not found."),
+			when("Try legacy async execution", [
+				calls("team", { agent: "worker", task: "hello", async: true }),
+				says("Use team lifecycle tools."),
 			]),
 		);
 
-		const results = t.events.toolResultsFor("team_status");
-		assert.equal(results.length, 1, "team_status tool should respond");
-		// Nonexistent ID → error result
-		assert.ok(results[0].isError, "should be an error for missing ID");
-		assert.ok(results[0].text.includes("not found") || results[0].text.includes("Provide"));
+		const results = t.events.toolResultsFor("team");
+		assert.equal(results.length, 1, "team tool should respond");
+		assert.ok(results[0].isError, "legacy async mode should be rejected");
+		assert.match(results[0].text, /no longer supported|team_create|spawn_teammate/i);
 	});
 
 	it("first-class team tools support the README-style team workflow", async () => {

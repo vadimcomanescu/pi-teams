@@ -28,6 +28,7 @@ export const TaskUpdateParams = Type.Object({
 	task_id: Type.String(),
 	status: Type.Optional(TaskStatusSchema),
 	owner: Type.Optional(Type.String()),
+	depends_on: Type.Optional(Type.Array(Type.String())),
 });
 
 interface TaskToolsDeps {
@@ -38,14 +39,17 @@ interface TaskToolsDeps {
 function normalizeTeammateTaskChanges(
 	actorName: string,
 	existing: { owner?: string; status: string },
-	changes: { status?: TeamTaskStatus; owner?: string },
-): { status?: TeamTaskStatus; owner?: string } {
+	changes: { status?: TeamTaskStatus; owner?: string; dependsOn?: string[] },
+): { status?: TeamTaskStatus; owner?: string; dependsOn?: string[] } {
 	const actorKey = actorName.toLowerCase();
 	const existingOwnerKey = existing.owner?.toLowerCase();
 	const requestedOwnerKey = changes.owner?.toLowerCase();
 
 	if (changes.status === "deleted") {
 		throw new Error("Teammates cannot mark tasks deleted. Ask the lead to delete or retire the task.");
+	}
+	if (changes.dependsOn !== undefined) {
+		throw new Error("Teammates cannot edit task dependencies. Ask the lead to update depends_on.");
 	}
 	if (requestedOwnerKey !== undefined && requestedOwnerKey !== actorKey) {
 		throw new Error(`Teammates may only assign tasks to themselves. Requested owner: ${changes.owner}`);
@@ -69,8 +73,10 @@ function toErrorResult(message: string, details?: Record<string, unknown>) {
 	};
 }
 
-function formatTask(task: { id: string; subject: string; status: string; owner?: string }): string {
-	return `${task.id} [${task.status}] ${task.subject}${task.owner ? ` (owner: ${task.owner})` : ""}`;
+function formatTask(task: { id: string; subject: string; status: string; owner?: string; blocked?: boolean; dependsOn?: string[] }): string {
+	const blockedLabel = task.blocked ? " [blocked]" : "";
+	const depsLabel = task.dependsOn && task.dependsOn.length > 0 ? ` (depends_on: ${task.dependsOn.join(",")})` : "";
+	return `${task.id} [${task.status}]${blockedLabel} ${task.subject}${task.owner ? ` (owner: ${task.owner})` : ""}${depsLabel}`;
 }
 
 export function createTaskCreateTool(deps: TaskToolsDeps): ToolDefinition<typeof TaskCreateParams> {
@@ -141,7 +147,9 @@ export function createTaskReadTool(deps: TaskToolsDeps): ToolDefinition<typeof T
 							`Task: ${task.id}`,
 							`Subject: ${task.subject}`,
 							`Status: ${task.status}`,
+							`Blocked: ${task.blocked ? "yes" : "no"}`,
 							task.owner ? `Owner: ${task.owner}` : undefined,
+							task.dependsOn.length > 0 ? `Depends on: ${task.dependsOn.join(", ")}` : undefined,
 							"",
 							task.description,
 						].filter(Boolean).join("\n"),
@@ -172,15 +180,18 @@ export function createTaskUpdateTool(deps: TaskToolsDeps): ToolDefinition<typeof
 				if (!existing) {
 					return toErrorResult(`Task not found: ${params.task_id}`, { team_name: team.name, task_id: params.task_id });
 				}
-				if (params.status === undefined && params.owner === undefined) {
-					return toErrorResult("Provide status and/or owner to update.", { team_name: team.name, task_id: params.task_id });
+				if (params.status === undefined && params.owner === undefined && params.depends_on === undefined) {
+					return toErrorResult("Provide status, owner, and/or depends_on to update.", { team_name: team.name, task_id: params.task_id });
 				}
-				const requestedChanges: { status?: TeamTaskStatus; owner?: string } = {};
+				const requestedChanges: { status?: TeamTaskStatus; owner?: string; dependsOn?: string[] } = {};
 				if (params.status !== undefined) {
 					requestedChanges.status = params.status as TeamTaskStatus;
 				}
 				if (params.owner !== undefined) {
 					requestedChanges.owner = params.owner;
+				}
+				if (params.depends_on !== undefined) {
+					requestedChanges.dependsOn = params.depends_on;
 				}
 				const changes = actor.kind === "teammate"
 					? normalizeTeammateTaskChanges(actor.name, existing, requestedChanges)

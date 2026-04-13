@@ -30,7 +30,6 @@ describe("public team-first contract", () => {
 			"### Lead calls",
 			"### Operator command",
 			"/team repo-review",
-			"/workers",
 			"/stop-all",
 			"default_model",
 			"<task-notification>",
@@ -38,6 +37,7 @@ describe("public team-first contract", () => {
 		]) {
 			assert.ok(intro.includes(required), `README intro should include ${required}`);
 		}
+		assert.ok(!intro.includes("/workers"), "README should expose a single /team surface");
 		assert.ok(!intro.includes("--coordinator"), "README should not require a coordinator flag");
 	});
 
@@ -57,15 +57,14 @@ describe("public team-first contract", () => {
 			"task_list",
 			"task_read",
 			"task_update",
-			"team_status",
 			"<task-notification>",
 			"resolve the current team",
 			"/team [team-name]",
-			"/workers",
 			"/stop-all",
 		]) {
 			assert.ok(install.includes(required), `installer should include ${required}`);
 		}
+		assert.ok(!install.includes("/workers"), "installer should expose a single /team surface");
 		assert.ok(install.includes("AGENTS_MANAGER_SHORTCUT_LABEL"), "installer should use the shared shortcut contract");
 		assert.ok(!install.includes("--coordinator"), "installer should not require a coordinator flag");
 	});
@@ -86,7 +85,10 @@ describe("public team-first contract", () => {
 		const prompt = readLocal("coordinator-prompt.ts");
 		const coordinatorAgent = readLocal("agents/coordinator.md");
 		const workerAgent = readLocal("agents/worker.md");
-		assert.equal(pkg.description, "Pi team orchestration extension for named teammates, shared task boards, and raw worker delegation");
+		const activePlan = readLocal("plans/team-lifecycle-alignment-plan.md");
+		const archivedPlan = readLocal("plans/archive/pi-teams-v1-launch.md");
+		const forbiddenReference = `Claude${" "}Code`;
+		assert.equal(pkg.description, "Pi team orchestration extension for named teammates, shared task boards, and coordinated execution");
 		assert.ok(pkg.keywords?.includes("tasks"), "package keywords should include tasks");
 		assert.ok(pkg.keywords?.includes("teammates"), "package keywords should include teammates");
 		for (const required of ["team_create", "spawn_teammate", "task_list", "check_teammate", "team_shutdown", "team_delete"]) {
@@ -102,5 +104,7 @@ describe("public team-first contract", () => {
 		assert.ok(!workerAgent.includes("Treat task state as lead-owned"), "worker prompt should not teach the removed lead-owned task canon");
 		assert.ok(!prompt.includes("--coordinator"), "coordinator prompt should not require a coordinator flag");
 		assert.ok(!coordinatorAgent.includes("--coordinator"), "builtin coordinator should not require a coordinator flag");
+		assert.ok(!activePlan.includes(forbiddenReference), "active plan should not mention the forbidden reference phrase");
+		assert.ok(!archivedPlan.includes(forbiddenReference), "archived plan should not mention the forbidden reference phrase");
 	});
 });

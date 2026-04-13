@@ -1,7 +1,7 @@
 {
   "name": "@vadimcomanescu/pi-teams",
-  "version": "1.0.6",
-  "description": "Pi team orchestration extension for named teammates, shared task boards, and raw worker delegation",
+  "version": "1.0.7",
+  "description": "Pi team orchestration extension for named teammates, shared task boards, and coordinated execution",
   "author": "Vadim Comanescu",
   "contributors": [
     "Nico Bailon"
@@ -42,7 +42,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types --test *.test.ts",
+    "test": "node --experimental-transform-types --import ./test/register-loader.mjs --test *.test.ts",
     "test:integration": "node --experimental-transform-types --import ./test/register-loader.mjs --test test/*.test.ts",
     "test:e2e": "node --experimental-transform-types --import ./test/register-loader.mjs --test test/e2e-*.test.ts",
     "test:all": "node --experimental-transform-types --import ./test/register-loader.mjs --test *.test.ts test/*.test.ts",

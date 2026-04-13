@@ -75,7 +75,6 @@ export const TeamParams = Type.Object({
 		description: "'fresh' (default) or 'fork' to branch from parent session",
 	})),
 	chainDir: Type.Optional(Type.String({ description: "Persistent directory for chain artifacts. Default: <tmpdir>/pi-chain-runs/ (auto-cleaned after 24h)" })),
-	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),
 	agentScope: Type.Optional(Type.String({ description: "Agent discovery scope: 'user', 'project', or 'both' (default: 'both'; project wins on name collisions)" })),
 	cwd: Type.Optional(Type.String()),
 	artifacts: Type.Optional(Type.Boolean({ description: "Write debug artifacts (default: true)" })),
@@ -90,9 +89,4 @@ export const TeamParams = Type.Object({
 	output: Type.Optional(Type.Any({ description: "Output file for single agent (string), or false to disable. Relative paths resolve against cwd." })),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4')" })),
-});
-
-export const StatusParams = Type.Object({
-	id: Type.Optional(Type.String({ description: "Async run id or prefix" })),
-	dir: Type.Optional(Type.String({ description: "Async run directory (overrides id search)" })),
 });

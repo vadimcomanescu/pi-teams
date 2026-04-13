@@ -67,7 +67,7 @@ describe("TeamManager.deleteTeam", () => {
 		assert.equal(teamManager.resolveCurrentTeamName(), undefined);
 	});
 
-	it("deleteTeam should delete an active team once all teammates are inactive", () => {
+	it("deleteTeam should allow deletion without shutdown when no teammates are active", () => {
 		teamManager.createTeam({ team_name: "repo-review" });
 		registry.register({
 			id: "worker-1",
@@ -88,7 +88,8 @@ describe("TeamManager.deleteTeam", () => {
 
 		const deleted = teamManager.deleteTeam();
 		assert.equal(deleted.noop, false);
-		assert.equal(teamManager.getTeam("repo-review"), undefined);
+		assert.equal(deleted.teamName, "repo-review");
+		assert.equal(fs.existsSync(teamManager.getConfigPath("repo-review")), false);
 	});
 
 	it("deleteTeam should refuse deletion while non-lead teammates are active", () => {

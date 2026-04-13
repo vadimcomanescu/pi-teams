@@ -7,8 +7,7 @@ import { discoverAvailableSkills } from "./skills.js";
 import type { TeamParamsLike } from "./team-executor.js";
 import { isCoordinatorMode } from "./coordinator.js";
 import type { AgentRegistry } from "./agent-registry.js";
-import { describeTeammateLifecycle } from "./teammate-lifecycle.js";
-import { getAgentDisplayName } from "./agent-display-name.js";
+import { resolveTeammateSurfaceState } from "./teammate-surface-state.js";
 import { AGENTS_MANAGER_SHORTCUT_KEY } from "./shortcut-contract.js";
 import type { SlashTeamResponse, SlashTeamUpdate } from "./slash-bridge.js";
 import type { TaskStore, TeamTask } from "./task-store.js";
@@ -74,17 +73,11 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
 	return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
 };
 
-const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fork: boolean } => {
+const extractExecutionFlags = (rawArgs: string): { args: string; fork: boolean } => {
 	let args = rawArgs.trim();
-	let bg = false;
 	let fork = false;
 
 	while (true) {
-		if (args.endsWith(" --bg") || args === "--bg") {
-			bg = true;
-			args = args === "--bg" ? "" : args.slice(0, -5).trim();
-			continue;
-		}
 		if (args.endsWith(" --fork") || args === "--fork") {
 			fork = true;
 			args = args === "--fork" ? "" : args.slice(0, -7).trim();
@@ -93,7 +86,7 @@ const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fo
 		break;
 	}
 
-	return { args, bg, fork };
+	return { args, fork };
 };
 
 const makeAgentCompletions = (state: TeamState, multiAgent: boolean) => (prefix: string) => {
@@ -130,7 +123,7 @@ async function requestSlashRun(
 		const startTimeoutMs = 15_000;
 		const startTimeout = setTimeout(() => {
 			finish(() => reject(new Error(
-				"Slash worker bridge did not start within 15s. Ensure the extension is loaded correctly.",
+				"Slash team bridge did not start within 15s. Ensure the extension is loaded correctly.",
 			)));
 		}, startTimeoutMs);
 
@@ -193,7 +186,7 @@ async function requestSlashRun(
 		if (!started && done) return;
 		if (!started) {
 			finish(() => reject(new Error(
-				"No slash worker bridge responded. Ensure the pi-teams extension is loaded correctly.",
+				"No slash team bridge responded. Ensure the pi-teams extension is loaded correctly.",
 			)));
 		}
 	});
@@ -215,7 +208,7 @@ async function runSlashTeam(
 ): Promise<void> {
 	const requestId = randomUUID();
 	const initialDetails = buildSlashInitialResult(requestId, params);
-	const initialText = extractSlashMessageText(initialDetails.result.content) || "Running worker...";
+	const initialText = extractSlashMessageText(initialDetails.result.content) || "Running team task...";
 	pi.sendMessage({
 		customType: SLASH_RESULT_TYPE,
 		content: initialText,
@@ -253,49 +246,77 @@ async function runSlashTeam(
 	}
 }
 
-function summarizeLine(text?: string, maxLength = 96): string | undefined {
-	if (!text) return undefined;
-	const normalized = text.replace(/\s+/g, " ").trim();
-	if (!normalized) return undefined;
-	return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+interface TeamViewArgs {
+	teamName?: string;
+	detailName?: string;
+	showFullPrompt: boolean;
+}
+
+function parseTeamViewArgs(rawArgs: string): TeamViewArgs {
+	const tokens = rawArgs.trim().split(/\s+/).filter(Boolean);
+	let teamName: string | undefined;
+	let detailName: string | undefined;
+	let showFullPrompt = false;
+
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index];
+		if (token === "--full-prompt") {
+			showFullPrompt = true;
+			continue;
+		}
+		if (token === "--detail") {
+			const value = tokens[index + 1];
+			if (value) {
+				detailName = value;
+				index += 1;
+			}
+			continue;
+		}
+		if (!teamName) {
+			teamName = token;
+		}
+	}
+
+	return { teamName, detailName, showFullPrompt };
 }
 
 function formatTaskLine(task: TeamTask): string {
-	const owner = task.owner ? ` owner=${task.owner}` : "";
-	return `- ${task.id} [${task.status}]${owner} ${task.subject}`;
+	const ownerName = task.owner
+		? (task.owner.startsWith("@") ? task.owner : `@${task.owner}`)
+		: undefined;
+	const owner = ownerName ? ` (assigned to ${ownerName})` : "";
+	return `- ${task.id} [${task.status}] ${task.subject}${owner}`;
 }
 
-function formatMemberLine(team: Team, member: Team["members"][number], registry?: AgentRegistry, tasks: TeamTask[] = []): string {
-	const live = registry?.resolve(member.agentId);
-	const status = live?.status ?? member.status;
-	const effectiveModel = member.model ?? team.defaultModel ?? "inherits lead session model";
-	const ownedTaskIds = tasks
-		.filter((task) => task.owner?.toLowerCase() === member.name.toLowerCase())
-		.map((task) => task.id);
-	const taskSuffix = ownedTaskIds.length > 0 ? ` tasks=${ownedTaskIds.join(", ")}` : "";
-	const lifecycle = describeTeammateLifecycle({
-		status,
-		sessionFile: live?.sessionFile,
-		acceptsFollowUps: Boolean(live?.rpcHandle),
-		active: team.state === "active",
-	});
-	const continuation = lifecycle.canQueueFollowUp
-		? "follow_up"
-		: lifecycle.canResume
-			? "resume"
-			: "none";
-	const continuationSuffix = ` continuation=${continuation}`;
-	const summary = summarizeLine(live?.result ?? member.lastSummary);
-	return summary
-		? `- ${member.name} [${status}] model=${effectiveModel}${taskSuffix}${continuationSuffix}\n  - ${summary}`
-		: `- ${member.name} [${status}] model=${effectiveModel}${taskSuffix}${continuationSuffix}`;
+function findMember(team: Team, name: string): Team["members"][number] | undefined {
+	return team.members.find((member) => member.name.toLowerCase() === name.toLowerCase());
 }
 
-function buildTeamOverview(team: Team, tasks: TeamTask[], registry?: AgentRegistry): string {
+function buildTeamRosterView(team: Team, tasks: TeamTask[], teamManager: TeamManager, registry?: AgentRegistry): string {
 	const defaultModel = team.defaultModel ?? "inherits lead session model";
+	const teammateCountLabel = `${team.members.length} teammate${team.members.length === 1 ? "" : "s"}`;
 	const teammateLines = team.members.length > 0
-		? team.members.map((member) => formatMemberLine(team, member, registry, tasks)).join("\n")
-		: "- No teammates yet";
+		? team.members.map((member) => {
+			const live = registry?.resolve(member.agentId) ?? registry?.resolve(member.name);
+			let checked;
+			try {
+				checked = typeof (teamManager as Partial<TeamManager>).checkTeammate === "function"
+					? teamManager.checkTeammate(team.name, member.name)
+					: undefined;
+			} catch {
+				checked = undefined;
+			}
+			const surface = resolveTeammateSurfaceState({
+				team,
+				member,
+				checked,
+				live,
+			});
+			const badges = surface.labels.map((entry) => `[${entry}]`).join(" ");
+			const headline = `${surface.displayName} ${badges}`.trim();
+			return surface.summary ? `${headline}\n  ${surface.summary}` : headline;
+		}).join("\n")
+		: "No teammates";
 	const taskLines = tasks.length > 0
 		? tasks.map((task) => formatTaskLine(task)).join("\n")
 		: "- No tasks yet";
@@ -303,14 +324,118 @@ function buildTeamOverview(team: Team, tasks: TeamTask[], registry?: AgentRegist
 	const description = team.description ? `Description: ${team.description}` : undefined;
 	return [
 		header,
+		`${teammateCountLabel}`,
 		description,
 		`Default model: ${defaultModel}`,
 		"",
-		"**Teammates**",
+		"**Roster**",
 		teammateLines,
 		"",
 		"**Tasks**",
 		taskLines,
+	].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function formatPromptPreview(prompt: string | undefined, showFullPrompt: boolean): { text: string; truncated: boolean } {
+	const normalized = prompt?.trim();
+	if (!normalized) return { text: "(prompt unavailable)", truncated: false };
+	if (showFullPrompt) return { text: normalized, truncated: false };
+	const maxChars = 260;
+	if (normalized.length <= maxChars) return { text: normalized, truncated: false };
+	return { text: `${normalized.slice(0, maxChars)}…`, truncated: true };
+}
+
+function getDetailPrimaryText(input: {
+	prompt: string | undefined;
+	summary: string | undefined;
+	showFullPrompt: boolean;
+	memberName: string;
+}): { heading: string; text: string; hint?: string } {
+	const prompt = input.prompt?.trim();
+	if (prompt) {
+		const preview = formatPromptPreview(prompt, input.showFullPrompt);
+		return {
+			heading: "**Prompt preview**",
+			text: preview.text,
+			hint: preview.truncated
+				? `Prompt preview truncated. Re-run with: /team --detail ${input.memberName} --full-prompt`
+				: undefined,
+		};
+	}
+
+	const summary = input.summary?.trim();
+	if (summary) {
+		const preview = formatPromptPreview(summary, input.showFullPrompt);
+		return {
+			heading: "**Latest summary**",
+			text: preview.text,
+			hint: preview.truncated
+				? `Latest summary truncated. Re-run with: /team --detail ${input.memberName} --full-prompt`
+				: undefined,
+		};
+	}
+
+	return {
+		heading: "**Prompt preview**",
+		text: "(prompt unavailable)",
+	};
+}
+
+function buildTeammateDetailView(
+	team: Team,
+	member: Team["members"][number],
+	tasks: TeamTask[],
+	showFullPrompt: boolean,
+	teamManager: TeamManager,
+	registry?: AgentRegistry,
+): string {
+	const live = registry?.resolve(member.agentId) ?? registry?.resolve(member.name);
+	let checked;
+	try {
+		checked = typeof (teamManager as Partial<TeamManager>).checkTeammate === "function"
+			? teamManager.checkTeammate(team.name, member.name)
+			: undefined;
+	} catch {
+		checked = undefined;
+	}
+	const surface = resolveTeammateSurfaceState({
+		team,
+		member,
+		checked,
+		live,
+	});
+	const labels = surface.labels.map((entry) => `[${entry}]`).join(" ");
+	const effectiveModel = surface.effectiveModel ?? "inherits lead session model";
+	const ownedTasks = tasks.filter((task) => task.owner?.toLowerCase() === member.name.toLowerCase());
+	const ownedTaskLines = ownedTasks.length > 0
+		? ownedTasks.map((task) => `- ${task.status === "completed" ? "[x]" : "[ ]"} ${task.id} ${task.subject}`).join("\n")
+		: "- None";
+	const detailPrimary = getDetailPrimaryText({
+		prompt: live?.task,
+		summary: member.lastSummary,
+		showFullPrompt,
+		memberName: member.name,
+	});
+	const activityText = surface.summary ?? "(no live activity yet)";
+
+	return [
+		`**Team:** ${team.name} [${team.state}]`,
+		`**Teammate:** ${surface.displayName} ${labels}`,
+		`Mode: ${surface.mode}`,
+		`Model: ${effectiveModel}`,
+		`CWD: ${member.cwd}`,
+		"",
+		"**Owned tasks**",
+		ownedTaskLines,
+		"",
+		"**Latest activity**",
+		activityText,
+		"",
+		`Availability: ${surface.availabilityText}`,
+		"",
+		detailPrimary.heading,
+		detailPrimary.text,
+		detailPrimary.hint,
 	].filter((line): line is string => Boolean(line)).join("\n");
 }
 
@@ -468,16 +593,16 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run", {
-		description: "Run a worker directly: /run agent[output=file] task [--bg] [--fork]",
+		description: "Run an agent directly: /run agent[output=file] task [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, false),
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
+			const { args: cleanedArgs, fork } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (firstSpace === -1) { ctx.ui.notify("Usage: /run <agent> <task> [--bg] [--fork]", "error"); return; }
+			if (firstSpace === -1) { ctx.ui.notify("Usage: /run <agent> <task> [--fork]", "error"); return; }
 			const { name: agentName, config: inline } = parseAgentToken(input.slice(0, firstSpace));
 			const task = input.slice(firstSpace + 1).trim();
-			if (!task) { ctx.ui.notify("Usage: /run <agent> <task> [--bg] [--fork]", "error"); return; }
+			if (!task) { ctx.ui.notify("Usage: /run <agent> <task> [--fork]", "error"); return; }
 
 			const agents = discoverAgents(state.baseCwd, "both").agents;
 			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
@@ -490,17 +615,16 @@ export function registerSlashCommands(
 			if (inline.output !== undefined) params.output = inline.output;
 			if (inline.skill !== undefined) params.skill = inline.skill;
 			if (inline.model) params.model = inline.model;
-			if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashTeam(pi, ctx, params);
 		},
 	});
 
 	pi.registerCommand("chain", {
-		description: "Run agents in sequence: /chain scout \"task\" -> planner [--bg] [--fork]",
+		description: "Run agents in sequence: /chain scout \"task\" -> planner [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
+			const { args: cleanedArgs, fork } = extractExecutionFlags(args);
 			const parsed = parseAgentArgs(state, cleanedArgs, "chain", ctx);
 			if (!parsed) return;
 			const chain = parsed.steps.map(({ name, config, task: stepTask }, i) => ({
@@ -513,17 +637,16 @@ export function registerSlashCommands(
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
 			const params: TeamParamsLike = { chain, task: parsed.task, clarify: false, agentScope: "both" };
-			if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashTeam(pi, ctx, params);
 		},
 	});
 
 	pi.registerCommand("parallel", {
-		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
+		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
+			const { args: cleanedArgs, fork } = extractExecutionFlags(args);
 			const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
 			if (!parsed) return;
 			if (parsed.steps.length > MAX_PARALLEL) { ctx.ui.notify(`Max ${MAX_PARALLEL} parallel tasks`, "error"); return; }
@@ -537,7 +660,6 @@ export function registerSlashCommands(
 				...(config.progress !== undefined ? { progress: config.progress } : {}),
 			}));
 			const params: TeamParamsLike = { tasks, clarify: false, agentScope: "both" };
-			if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashTeam(pi, ctx, params);
 		},
@@ -556,74 +678,70 @@ export function registerSlashCommands(
 	};
 
 	pi.registerCommand("team", {
-		description: "Show the active team, teammates, and shared tasks: /team [team-name]",
+		description: "Show team roster or teammate detail: /team [team-name] [--detail <teammate>] [--full-prompt]",
 		handler: async (args, ctx) => {
 			if (!requireLeadSession(ctx)) return;
 			if (!deps.teamManager || !deps.createTaskStore) {
 				if (ctx.hasUI) ctx.ui.notify("Team visibility is not available in this session.", "warning");
 				return;
 			}
-			const requestedTeamName = args.trim();
-			const team = requestedTeamName
-				? deps.teamManager.getTeam(requestedTeamName)
+			const parsed = parseTeamViewArgs(args);
+			let team = parsed.teamName
+				? deps.teamManager.getTeam(parsed.teamName)
 				: deps.teamManager.getActiveTeam();
+			let detailName = parsed.detailName;
+
+			if (!team && parsed.teamName) {
+				const activeTeam = deps.teamManager.getActiveTeam();
+				if (activeTeam && findMember(activeTeam, parsed.teamName)) {
+					team = activeTeam;
+					detailName = parsed.teamName;
+				}
+			}
+
 			if (!team) {
-				const message = requestedTeamName
-					? `Team not found: ${requestedTeamName}`
+				const message = parsed.teamName
+					? `Team not found: ${parsed.teamName}`
 					: "No active team in this lead session";
 				if (ctx.hasUI) ctx.ui.notify(message, "info");
 				return;
 			}
-			const tasks = deps.createTaskStore(team.name).listTasks();
-			pi.sendMessage(
-				{ customType: "team-notify", content: buildTeamOverview(team, tasks, deps.registry), display: true },
-				{ triggerTurn: false },
-			);
-		},
-	});
-	pi.registerCommand("workers", {
-		description: "List running workers in the current lead session",
-		handler: async (_args, ctx) => {
-			if (!requireLeadSession(ctx)) return;
-			if (!deps.registry) {
-				if (ctx.hasUI) ctx.ui.notify("Worker registry is not available in this session.", "warning");
-				return;
-			}
-			const running = deps.registry.getRunning();
-			if (running.length === 0) {
-				if (ctx.hasUI) ctx.ui.notify("No workers running", "info");
-				return;
-			}
-			const lines = running.map((a) => {
-				const label = getAgentDisplayName({ id: a.id, name: a.name, agent: a.agentType });
-				const name = `${label} (${a.id})`;
-				const duration = a.status === "running"
-					? ` ${Math.round((Date.now() - a.startTime) / 1000)}s`
-					: "";
-				return `${a.status === "running" ? "🔄" : a.status === "completed" ? "✅" : "❌"} ${name} [${a.status}]${duration}`;
-			});
-			pi.sendMessage(
-				{ customType: "team-notify", content: `**Workers:**\n${lines.join("\n")}`, display: true },
-				{ triggerTurn: false },
-			);
-		},
-	});
 
+			const tasks = deps.createTaskStore(team.name).listTasks();
+			if (detailName) {
+				const member = findMember(team, detailName);
+				if (!member) {
+					if (ctx.hasUI) ctx.ui.notify(`Teammate not found in ${team.name}: ${detailName}`, "info");
+					return;
+				}
+				pi.sendMessage(
+					{ customType: "team-notify", content: buildTeammateDetailView(team, member, tasks, parsed.showFullPrompt, deps.teamManager, deps.registry), display: true },
+					{ triggerTurn: false },
+				);
+				return;
+			}
+
+			pi.sendMessage(
+				{ customType: "team-notify", content: buildTeamRosterView(team, tasks, deps.teamManager, deps.registry), display: true },
+				{ triggerTurn: false },
+			);
+		},
+	});
 	pi.registerCommand("stop-all", {
-		description: "Stop all running workers in the current lead session",
+		description: "Stop all running teammates in the current lead session",
 		handler: async (_args, ctx) => {
 			if (!requireLeadSession(ctx)) return;
 			if (!deps.registry) {
-				if (ctx.hasUI) ctx.ui.notify("Worker registry is not available in this session.", "warning");
+				if (ctx.hasUI) ctx.ui.notify("Teammate registry is not available in this session.", "warning");
 				return;
 			}
 			const running = deps.registry.getRunning();
 			if (running.length === 0) {
-				if (ctx.hasUI) ctx.ui.notify("No workers running", "info");
+				if (ctx.hasUI) ctx.ui.notify("No teammates running", "info");
 				return;
 			}
 			deps.registry.stopAll();
-			if (ctx.hasUI) ctx.ui.notify(`Stopped ${running.length} worker(s)`, "info");
+			if (ctx.hasUI) ctx.ui.notify(`Stopped ${running.length} teammate(s)`, "info");
 		},
 	});
 }

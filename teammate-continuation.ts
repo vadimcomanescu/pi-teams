@@ -34,7 +34,6 @@ export function createResumeAgent(deps: ContinuationDeps): ResumeAgentFn {
 			cwd: agent.cwd,
 			model: agent.model,
 			clarify: false,
-			async: false,
 			runtimeRole: agent.runtimeRole ?? "raw-worker",
 			teamMetadata: agent.teamMetadata,
 			sessionFile: agent.sessionFile,
@@ -50,6 +49,7 @@ export function createResumeAgent(deps: ContinuationDeps): ResumeAgentFn {
 				model: agent.model,
 				status: "running",
 				cwd: agent.cwd ?? deps.getFallbackCwd(),
+				lastSummary: message,
 			});
 		}
 		return { agentId: result.details.asyncId };

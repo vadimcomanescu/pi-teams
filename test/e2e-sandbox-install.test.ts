@@ -25,7 +25,7 @@ describe(
 				packageDir: PACKAGE_DIR,
 				expect: {
 					extensions: 2,
-					tools: ["team", "team_status"],
+					tools: ["team"],
 				},
 			});
 
@@ -33,7 +33,6 @@ describe(
 			assert.equal(result.loaded.extensions, 2);
 			for (const toolName of [
 				"team",
-				"team_status",
 				"team_create",
 				"spawn_teammate",
 				"check_teammate",

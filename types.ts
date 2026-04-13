@@ -146,49 +146,10 @@ export interface ArtifactConfig {
 	cleanupDays: number;
 }
 
-// ============================================================================
-// Async Execution
-// ============================================================================
-
-export interface AsyncStatus {
-	runId: string;
-	mode: "single" | "chain";
-	state: "queued" | "running" | "complete" | "failed" | "stopped" | "timed_out";
-	startedAt: number;
-	endedAt?: number;
-	lastUpdate?: number;
-	currentStep?: number;
-	steps?: Array<{ agent: string; status: string; durationMs?: number; tokens?: TokenUsage; skills?: string[] }>;
-	sessionDir?: string;
-	outputFile?: string;
-	totalTokens?: TokenUsage;
-	sessionFile?: string;
-}
-
-export interface AsyncJobState {
-	asyncId: string;
-	asyncDir: string;
-	name?: string;
-	status: "queued" | "running" | "complete" | "failed" | "stopped" | "timed_out";
-	mode?: "single" | "chain";
-	agents?: string[];
-	currentStep?: number;
-	stepsTotal?: number;
-	startedAt?: number;
-	updatedAt?: number;
-	sessionDir?: string;
-	outputFile?: string;
-	totalTokens?: TokenUsage;
-	sessionFile?: string;
-}
-
 export interface TeamState {
 	baseCwd: string;
 	currentSessionId: string | null;
-	asyncJobs: Map<string, AsyncJobState>;
-	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
 	lastUiContext: ExtensionContext | null;
-	poller: NodeJS.Timeout | null;
 	completionSeen: Map<string, number>;
 	watcher: FSWatcher | null;
 	watcherRestartTimer: ReturnType<typeof setTimeout> | null;
@@ -237,6 +198,7 @@ export interface RunSyncOptions {
 	onSpawn?: (proc: import("node:child_process").ChildProcess) => void;
 	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
 	onTeammateControlMessage?: (message: TeammateControlMessage) => void;
+	onTeammateIdle?: (summary?: string) => void;
 	/**
 	 * RPC mode only. When true, sends an abort command after the first final
 	 * assistant response (stopReason: stop|error) so one-shot teammate runs
@@ -259,8 +221,8 @@ export interface RunSyncOptions {
 }
 
 export interface ExtensionConfig {
-	asyncByDefault?: boolean;
 	defaultSessionDir?: string;
+	orphanCleanupMaxAgeHours?: number;
 }
 
 // ============================================================================
@@ -283,17 +245,13 @@ export const DEFAULT_ARTIFACT_CONFIG: ArtifactConfig = {
 
 export const MAX_PARALLEL = 8;
 export const MAX_CONCURRENCY = 4;
-export const RESULTS_DIR = path.join(os.tmpdir(), "pi-async-team-results");
-export const ASYNC_DIR = path.join(os.tmpdir(), "pi-async-team-runs");
-export const WIDGET_KEY = "team-async";
+export const RESULTS_DIR = path.join(os.tmpdir(), "pi-team-results");
 export const SLASH_RESULT_TYPE = "team-slash-result";
 export const SLASH_TEAM_REQUEST_EVENT = "team:slash:request";
 export const SLASH_TEAM_STARTED_EVENT = "team:slash:started";
 export const SLASH_TEAM_RESPONSE_EVENT = "team:slash:response";
 export const SLASH_TEAM_UPDATE_EVENT = "team:slash:update";
 export const SLASH_TEAM_CANCEL_EVENT = "team:slash:cancel";
-export const POLL_INTERVAL_MS = 250;
-export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_TEAM_MAX_DEPTH = 2;
 
 export const DEFAULT_FORK_PREAMBLE =

@@ -177,6 +177,7 @@ describe("teammate graceful shutdown protocol", () => {
 		assert.equal(outcome.approved, false);
 		assert.equal(leadManager.getTeam("review")?.state, "active");
 		assert.equal(leadManager.checkTeammate("review", "docs").status, "running");
+		assert.equal(leadManager.checkTeammate("review", "docs").lifecycle.activity, "running");
 		assert.match(leadManager.checkTeammate("review", "docs").lastSummary ?? "", /rejected/i);
 		assert.equal(store.readTask(taskId)?.status, "in_progress");
 		assert.equal(store.readTask(taskId)?.owner, "docs");

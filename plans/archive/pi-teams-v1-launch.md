@@ -14,7 +14,7 @@ without further user intervention.
 
 ## Reference Implementation
 
-Claude Code's coordinator mode (`claude-code-original/src/coordinator/coordinatorMode.ts`)
+the reference implementation's coordinator mode (`claude-code-original/src/coordinator/coordinatorMode.ts`)
 plus its AgentTool, SendMessageTool, TaskStopTool, and TeamCreateTool.
 
 Studied source files for the parity target:
@@ -26,7 +26,7 @@ Studied source files for the parity target:
 
 ### Claude-style parity contract, minus tmux/in-process UI
 
-This project should match the **user experience and public interaction model** of Claude Code Agent Teams as closely as possible, while explicitly omitting tmux panes, split panes, transcript switching, and other heavyweight UI/runtime machinery.
+This project should match the **user experience and public interaction model** of the reference implementation Agent Teams as closely as possible, while explicitly omitting tmux panes, split panes, transcript switching, and other heavyweight UI/runtime machinery.
 
 **Important rule:** when our earlier design guesses conflict with the reference UX, the reference UX wins. We should not invent a different public interaction model unless we make that divergence explicit and deliberate.
 
@@ -41,7 +41,7 @@ This is the user-facing contract we should emulate.
    - If a requested team name already exists, the UX should stay smooth. The reference implementation generates a unique fallback name instead of hard-failing.
 
 2. **Spawn teammates through the normal worker tool surface**
-   - In Claude Code, teammate spawning is not a separate conceptual product. It is the normal Agent tool with additional team context (`team_name`, `name`, optional mode/model).
+   - In the reference implementation, teammate spawning is not a separate conceptual product. It is the normal Agent tool with additional team context (`team_name`, `name`, optional mode/model).
    - User mental model: “launch teammates into this team”, not “switch to a second orchestration API family”.
    - Internal plumbing may differ here, but the public feel should be unified.
 
@@ -126,7 +126,7 @@ and the experience feels like this:
 
 ### Explicit non-goals for parity work
 
-We are **not** trying to copy these parts of Claude Code right now:
+We are **not** trying to copy these parts of the reference implementation right now:
 - tmux pane orchestration
 - separate OS windows
 - transcript zoom/switch UI
@@ -163,7 +163,7 @@ For launch, the **human-facing contract is final now**:
 - automatic teammate updates are the primary feedback loop
 - explicit visibility commands are secondary support tools
 
-Internal lead tools may differ from Claude Code's exact internal surface as long as they do not leak into the human-facing experience. We do **not** need tool-name parity for its own sake. We need behavioral parity where the user can naturally request collaborative work and get the same feel.
+Internal lead tools may differ from the reference implementation's exact internal surface as long as they do not leak into the human-facing experience. We do **not** need tool-name parity for its own sake. We need behavioral parity where the user can naturally request collaborative work and get the same feel.
 
 That means the launch canon is:
 - team creation as a first-class act in the coordinator's behavior
@@ -610,7 +610,7 @@ Background task completed: **scout**
 Found the bug at validate.ts:42...
 ```
 
-### Coordinator format (XML, matches Claude Code's `<task-notification>`)
+### Coordinator format (XML, matches the reference implementation's `<task-notification>`)
 
 ```xml
 <task-notification>
@@ -702,7 +702,7 @@ if (isCoordinatorMode()) {
 }
 ```
 
-### Coordinator system prompt (adapted from Claude Code)
+### Coordinator system prompt (adapted from the reference implementation)
 
 Key sections:
 1. **Role** — "You are a coordinator. Direct workers to research, implement, verify."
@@ -796,7 +796,7 @@ Running workers shown in the status widget via `render.ts`:
 ### Acceptance criteria
 - [ ] `--coordinator` flag activates coordinator mode
 - [ ] System prompt injected via `before_agent_start` hook
-- [ ] System prompt covers all 10 sections from Claude Code's coordinator prompt
+- [ ] System prompt covers all 10 sections from the reference implementation's coordinator prompt
 - [ ] `send_message` and `task_stop` tools only registered in coordinator mode
 - [ ] All team spawns use RPC foreground mode when coordinator mode active
 - [ ] Max concurrent workers enforced (default 8)
@@ -890,7 +890,7 @@ All phases above are **implemented and merged**. See commits:
 The user says "fix the auth bug" and the coordinator LLM spawns named
 workers, receives their notifications, sends follow-ups, stops bad workers,
 and synthesizes results. This is the **coordinator/worker** model from
-Claude Code's `coordinatorMode.ts`.
+the reference implementation's `coordinatorMode.ts`.
 
 ### What's missing: lean Claude Agent Teams parity
 We do **not** need every Claude Agent Teams capability to get the right
@@ -1310,7 +1310,7 @@ The following product decisions are now fixed unless we explicitly revise them l
 - `/team`, `/workers`, `check_teammate`, and similar visibility affordances are supportive, not the main loop.
 - The parity bar is user experience and coordinator behavior, not literal internal API identity.
 
-### Direct reference correction from Claude Code source
+### Direct reference correction from the reference implementation source
 
 After re-reading the actual reference implementation (`src/coordinator/coordinatorMode.ts` and `src/tools/AgentTool/AgentTool.tsx` in `claude-code-original`), several earlier "acceptable divergences" are no longer acceptable. The reference wins.
 
@@ -1396,7 +1396,7 @@ The current implementation is now in this state:
 ### Parity Wave B: Current-team context + continuation semantics (~2 days)
 
 **Purpose**
-Close the biggest remaining reference gaps first, using Claude Code's actual behavior as the source of truth.
+Close the biggest remaining reference gaps first, using the reference implementation's actual behavior as the source of truth.
 
 #### B1. Current-team context resolution
 - [x] Add a single canonical "current team" resolver
@@ -1554,7 +1554,7 @@ Reference-parity Wave C                               ✅ completed
 
 **Parity target:** the user can say
 "Create a team with 3 teammates to review this repo, wait for them, then synthesize"
-and the coordinator handles that with the same collaboration feel as Claude Code Agent Teams, adapted only where pi runtime constraints force it.
+and the coordinator handles that with the same collaboration feel as the reference implementation Agent Teams, adapted only where pi runtime constraints force it.
 
 ---
 

@@ -8,6 +8,7 @@ import { AgentRegistry } from "../agent-registry.js";
 import { clearLeaderTeamName } from "../leader-team-state.js";
 import { clearSessionCreatedTeams } from "../session-created-teams.js";
 import { createSendMessageTool } from "../send-message-tool.js";
+import { readUnreadMailboxMessages } from "../teammate-mailbox.js";
 import { TeamManager } from "../team-manager.js";
 
 function makeFakeRpcHandle() {
@@ -58,6 +59,7 @@ describe("send_message tool", () => {
 
 	it("queues a plain follow-up for a running RPC teammate when summary is provided", async () => {
 		const fake = makeFakeRpcHandle();
+		const initialUpdateAt = Date.now() - 1_000;
 		registry.register({
 			id: "w1",
 			name: "researcher",
@@ -65,6 +67,7 @@ describe("send_message tool", () => {
 			task: "investigate bugs",
 			status: "running",
 			startTime: Date.now(),
+			lastUpdateAt: initialUpdateAt,
 			rpcHandle: fake.rpcHandle,
 		});
 
@@ -79,6 +82,7 @@ describe("send_message tool", () => {
 		assert.equal(result.details.to, "researcher");
 		assert.equal(result.details.message_type, "plain_text");
 		assert.deepEqual(parseWritten(fake.written)[0], { type: "follow_up", message: "Focus on auth module" });
+		assert.ok((registry.resolve("w1")?.lastUpdateAt ?? 0) > initialUpdateAt);
 	});
 
 	it("routes a plain follow-up to a running RPC agent by ID", async () => {
@@ -104,6 +108,92 @@ describe("send_message tool", () => {
 		assert.deepEqual(parseWritten(fake.written)[0], { type: "follow_up", message: "Please stop" });
 	});
 
+	it("marks an idle live teammate active again when a follow-up is queued", async () => {
+		const fake = makeFakeRpcHandle();
+		teamManager.createTeam({ team_name: "review" });
+		registry.register({
+			id: "worker-1",
+			name: "docs",
+			agentType: "worker",
+			task: "Review docs",
+			status: "running",
+			startTime: Date.now(),
+			rpcHandle: fake.rpcHandle,
+			runtimeRole: "teammate",
+			sessionFile: "/tmp/docs.jsonl",
+			teamMetadata: {
+				teamName: "review",
+				teammateName: "docs",
+				teammateNames: ["docs"],
+				assignedTaskIds: [],
+				configPath: path.join(tempDir, "review", "config.json"),
+				tasksPath: path.join(tempDir, "review", "tasks.json"),
+			},
+		});
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			status: "running",
+			cwd: tempDir,
+		});
+		teamManager.recordTeammateActivity("worker-1", false, "Waiting for follow-up");
+
+		const tool = createSendMessageTool(registry, { teamManager, runtimeRole: "lead" });
+		const result = await tool.execute("call-2b", {
+			to: "docs",
+			summary: "Continue docs work",
+			message: "Handle the follow-up",
+		}, undefined, undefined, {} as any);
+
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details.delivered, "queued");
+		assert.equal(teamManager.checkTeammate("review", "docs").member.isActive, true);
+	});
+
+	it("refuses follow-ups for teammates in shutdown teams even if the registry still says running", async () => {
+		const fake = makeFakeRpcHandle();
+		teamManager.createTeam({ team_name: "review" });
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			status: "running",
+			cwd: tempDir,
+		});
+		teamManager.shutdownTeam("review", "done");
+		registry.register({
+			id: "worker-2",
+			name: "docs",
+			agentType: "worker",
+			task: "late follow-up",
+			status: "running",
+			startTime: Date.now(),
+			rpcHandle: fake.rpcHandle,
+			runtimeRole: "teammate",
+			sessionFile: "/tmp/docs.jsonl",
+			teamMetadata: {
+				teamName: "review",
+				teammateName: "docs",
+				teammateNames: ["docs"],
+				assignedTaskIds: [],
+				configPath: path.join(tempDir, "review", "config.json"),
+				tasksPath: path.join(tempDir, "review", "tasks.json"),
+			},
+		});
+
+		const tool = createSendMessageTool(registry, { teamManager, runtimeRole: "lead" });
+		const result = await tool.execute("call-2c", {
+			to: "docs",
+			summary: "Continue docs work",
+			message: "Handle the follow-up",
+		}, undefined, undefined, {} as any);
+
+		assert.equal(result.isError, true);
+		assert.match((result.content[0] as { type: "text"; text: string }).text, /not active/i);
+		assert.equal(fake.written, "");
+	});
+
 	it("rejects a plain-text follow-up without summary", async () => {
 		const fake = makeFakeRpcHandle();
 		registry.register({
@@ -127,7 +217,7 @@ describe("send_message tool", () => {
 		assert.equal(fake.written, "");
 	});
 
-	it("rejects message to background-mode agent (running, no rpcHandle) with helpful error", async () => {
+	it("rejects message to non-addressable running agent (no rpcHandle) with helpful error", async () => {
 		registry.register({
 			id: "bg-1",
 			name: "bgworker",
@@ -145,7 +235,7 @@ describe("send_message tool", () => {
 		}, undefined, undefined, {} as any);
 
 		assert.equal(result.isError, true);
-		assert.match((result.content[0] as { type: "text"; text: string }).text, /background mode/);
+		assert.match((result.content[0] as { type: "text"; text: string }).text, /without a follow-up channel/i);
 	});
 
 	it("resumes an idle teammate with a session for a plain follow-up when summary is provided", async () => {
@@ -382,20 +472,17 @@ describe("send_message tool", () => {
 		assert.equal(result.isError, undefined);
 		assert.equal(result.details.message_type, "shutdown_request");
 		assert.ok(result.details.request_id);
-		const payload = parseWritten(fake.written)[0] as { type: string; message: string };
-		assert.equal(payload.type, "follow_up");
-		assert.match(payload.message, /graceful shutdown/i);
-		assert.match(payload.message, /shutdown_response/);
-		assert.match(payload.message, new RegExp(result.details.request_id!));
+		const inbox = readUnreadMailboxMessages(teamManager.getTeamDir("review"), "docs");
+		assert.equal(inbox.length, 1);
+		assert.equal(inbox[0]?.payload.type, "plain_text");
+		const messageText = inbox[0]?.payload.type === "plain_text" ? inbox[0].payload.text : "";
+		assert.match(messageText, /graceful shutdown/i);
+		assert.match(messageText, /shutdown_response/);
+		assert.match(messageText, new RegExp(result.details.request_id!));
 		assert.equal(teamManager.getTeam("review")?.members[0]?.pendingShutdownRequestId, result.details.request_id);
 	});
 
-	it("does not persist a shutdown request when delivery fails", async () => {
-		const brokenStdin = {
-			write(_data: string): void {
-				throw new Error("EPIPE: broken pipe");
-			},
-		};
+	it("does not persist a shutdown request when inbox delivery fails", async () => {
 		teamManager.createTeam({ team_name: "review" });
 		registry.register({
 			id: "worker-1",
@@ -404,7 +491,6 @@ describe("send_message tool", () => {
 			task: "Review docs",
 			status: "running",
 			startTime: Date.now(),
-			rpcHandle: { stdin: brokenStdin as any, proc: { killed: true } as any },
 			runtimeRole: "teammate",
 			teamMetadata: {
 				teamName: "review",
@@ -423,7 +509,11 @@ describe("send_message tool", () => {
 			cwd: tempDir,
 		});
 
-		const tool = createSendMessageTool(registry, { teamManager, runtimeRole: "lead" });
+		const brokenManager = Object.create(teamManager) as TeamManager;
+		brokenManager.getTeamDir = () => {
+			throw new Error("disk offline");
+		};
+		const tool = createSendMessageTool(registry, { teamManager: brokenManager, runtimeRole: "lead" });
 		const result = await tool.execute("call-shutdown-request-fail", {
 			to: "docs",
 			summary: "Wrap up and stop when safe",
@@ -434,7 +524,7 @@ describe("send_message tool", () => {
 		assert.equal(teamManager.getTeam("review")?.members[0]?.pendingShutdownRequestId, undefined);
 	});
 
-	it("emits a shutdown_response control event for lead-side routing", async () => {
+	it("routes shutdown_response through the lead inbox and emits control only for rejection", async () => {
 		teamManager.createTeam({ team_name: "review" });
 		teamManager.registerTeammate("review", {
 			name: "docs",
@@ -461,17 +551,23 @@ describe("send_message tool", () => {
 			const tool = createSendMessageTool(registry, { teamManager: teammateManager, runtimeRole: "teammate" });
 			const result = await tool.execute("call-shutdown-response", {
 				to: "lead",
-				message: { type: "shutdown_response", request_id: "req-1", approve: true },
+				message: { type: "shutdown_response", request_id: "req-1", approve: false, reason: "still working" },
 			}, undefined, undefined, {} as any);
 			assert.equal(result.isError, undefined);
-			assert.equal(result.details.approved, true);
+			assert.equal(result.details.approved, false);
+			const inbox = readUnreadMailboxMessages(teammateManager.getTeamDir("review"), "lead");
+			assert.equal(inbox.length, 1);
+			assert.equal(inbox[0]?.payload.type, "shutdown_response");
+			if (inbox[0]?.payload.type === "shutdown_response") {
+				assert.equal(inbox[0].payload.requestId, "req-1");
+				assert.equal(inbox[0].payload.approve, false);
+			}
 			assert.ok(writes.some((line) => line.includes('"teammate_control_message"')));
 			assert.ok(writes.some((line) => line.includes('"requestId":"req-1"')));
 		} finally {
 			(process.stdout.write as unknown as typeof process.stdout.write) = originalWrite;
 		}
 	});
-
 	it("rejects shutdown_response approval when routed anywhere except the lead", async () => {
 		const tool = createSendMessageTool(registry, { teamManager, runtimeRole: "teammate" });
 		const result = await tool.execute("call-invalid-target", {

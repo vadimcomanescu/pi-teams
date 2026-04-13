@@ -23,7 +23,7 @@ const isHelp = args.includes("--help") || args.includes("-h");
 
 if (isHelp) {
 	console.log(`
-pi-teams - Pi team orchestration extension for named teammates, shared task boards, and raw worker delegation
+pi-teams - Pi team orchestration extension for named teammates, shared task boards, and coordinated execution
 
 Usage:
   npx @vadimcomanescu/pi-teams          Install the extension
@@ -94,28 +94,31 @@ Primary lead tools:
   • spawn_teammate  - Launch a named teammate inside that team
   • check_teammate  - Inspect teammate status and last summary
   • team_shutdown   - Stop the active team
-  • team_delete     - Physically delete the current lead team after teammates stop
+  • team_delete     - Physically delete the current lead team once non-lead teammates are no longer active
   • task_create     - Add a shared team task
   • task_list       - List shared team tasks
   • task_read       - Read one shared team task
   • task_update     - Update shared task board state
 
-Advanced worker tools:
-  • team            - Delegate raw worker execution (single, chain, parallel)
-  • team_status     - Check async raw worker run status
+Advanced execution tools:
+  • team            - Low-level execution for single, chain, and parallel runs
   • send_message    - Follow up with a running teammate, or resume an idle teammate with a session
-  • task_stop       - Stop a running teammate or worker
+  • task_stop       - Stop a running teammate or low-level execution
 
 Notification-first coordination:
   • Teammate completions arrive automatically as <task-notification> messages
   • Omit team_name after team_create, follow-up tools resolve the current team
-  • task_update is shared board state, leads can edit any task and teammates can claim or complete their own work
+  • team_shutdown stops teammates, marks the team shutdown, and releases owned open work back to the shared board
+  • team_delete is the final physical cleanup step, fails while non-lead teammates are still active, and is a successful no-op when no current team exists
+  • Plain-text send_message follow-ups require a summary
+  • Idle teammates with a saved session can be resumed, and mode changes remain visible through /team and check_teammate
+  • task_update is shared board state, leads can edit any task, teammates can claim or complete their own work, and blocked tasks wait for depends_on prerequisites
   • Use check_teammate only when you need an explicit inspection snapshot
 
 Operator visibility commands:
-  • /team [team-name] - Show the active team, teammates, and shared tasks
-  • /workers          - List running workers in the current lead session
-  • /stop-all         - Stop all running workers in the current lead session
+  • /team [team-name] - Show the active team, teammates, shared tasks, and latest activity
+  • /team --detail <name> [--full-prompt] - Show mode, model, cwd, owned tasks, activity, availability, and prompt/summary preview
+  • /stop-all         - Stop all running teammates in the current lead session
 
 Agents Manager shortcut:
   • ${AGENTS_MANAGER_SHORTCUT_LABEL}      - Open the Agents Manager overlay

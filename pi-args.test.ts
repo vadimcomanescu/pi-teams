@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildPiArgs } from "./pi-args.ts";
+import { buildPiArgs, getParentSkillCliOptions } from "./pi-args.ts";
 
 describe("buildPiArgs RPC mode", () => {
 	it("skips task arg when skipTaskArg is true", () => {
@@ -49,6 +49,26 @@ describe("buildPiArgs RPC mode", () => {
 	});
 });
 
+describe("parent skill CLI option parsing", () => {
+	it("parses --skills and --skills= forms and de-duplicates values", () => {
+		const parsed = getParentSkillCliOptions([
+			"node",
+			"pi",
+			"--skills",
+			"safe-bash,web-search",
+			"--skills=web-search,repo-map",
+		]);
+		assert.equal(parsed.noSkills, false);
+		assert.deepEqual(parsed.skillPaths, ["safe-bash", "web-search", "repo-map"]);
+	});
+
+	it("parses --no-skills", () => {
+		const parsed = getParentSkillCliOptions(["node", "pi", "--no-skills"]);
+		assert.equal(parsed.noSkills, true);
+		assert.deepEqual(parsed.skillPaths, []);
+	});
+});
+
 describe("buildPiArgs session wiring", () => {
 	it("uses --session when sessionFile is provided", () => {
 		const { args } = buildPiArgs({
@@ -76,5 +96,36 @@ describe("buildPiArgs session wiring", () => {
 		assert.ok(args.includes("--session-dir"));
 		assert.ok(args.includes("/tmp/team-sessions"));
 		assert.ok(!args.includes("--session"));
+	});
+
+	it("forwards inherited parent skill flags when no explicit skill override is provided", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["--mode", "rpc"],
+			task: "hello",
+			skipTaskArg: true,
+			sessionEnabled: false,
+			inheritNoSkills: true,
+			inheritedSkillPaths: ["safe-bash", "web-search"],
+		});
+
+		assert.ok(args.includes("--no-skills"));
+		const idx = args.indexOf("--skills");
+		assert.ok(idx !== -1, "should include --skills");
+		assert.equal(args[idx + 1], "safe-bash,web-search");
+	});
+
+	it("does not forward inherited --skills when explicit skill override is provided", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["--mode", "rpc"],
+			task: "hello",
+			skipTaskArg: true,
+			sessionEnabled: false,
+			inheritNoSkills: false,
+			inheritedSkillPaths: ["safe-bash"],
+			skills: ["repo-map"],
+		});
+
+		assert.ok(args.includes("--no-skills"));
+		assert.ok(!args.includes("--skills"), "explicit skill overrides should not mix inherited skill paths");
 	});
 });

@@ -18,12 +18,26 @@ describe("describeTeammateLifecycle", () => {
 		});
 	});
 
-	it("marks a running background worker as not directly addressable", () => {
+	it("marks a running non-addressable worker as not directly addressable", () => {
 		const lifecycle = describeTeammateLifecycle({ status: "running", acceptsFollowUps: false });
 		assert.equal(lifecycle.activity, "running");
 		assert.equal(lifecycle.addressable, false);
 		assert.equal(lifecycle.canQueueFollowUp, false);
-		assert.match(lifecycle.continuationText, /background mode/i);
+		assert.match(lifecycle.continuationText, /without a follow-up channel/i);
+	});
+
+	it("treats a live teammate waiting for follow-up as idle but still directly addressable", () => {
+		const lifecycle = describeTeammateLifecycle({
+			status: "running",
+			acceptsFollowUps: true,
+			sessionFile: "/tmp/team.jsonl",
+			isActive: false,
+		});
+		assert.equal(lifecycle.activity, "idle");
+		assert.equal(lifecycle.addressable, true);
+		assert.equal(lifecycle.canQueueFollowUp, true);
+		assert.equal(lifecycle.canResume, false);
+		assert.match(lifecycle.continuationText, /queue a follow-up immediately/i);
 	});
 
 	it("treats an idle teammate with a session as resumable", () => {
@@ -48,7 +62,23 @@ describe("describeTeammateLifecycle", () => {
 			sessionFile: "/tmp/team.jsonl",
 			active: false,
 		});
+		assert.equal(lifecycle.activity, "idle");
 		assert.equal(lifecycle.addressable, false);
+		assert.equal(lifecycle.canResume, false);
+		assert.match(lifecycle.continuationText, /not active/i);
+	});
+
+	it("treats a running teammate in a shutdown team as idle and non-addressable", () => {
+		const lifecycle = describeTeammateLifecycle({
+			status: "running",
+			acceptsFollowUps: true,
+			sessionFile: "/tmp/team.jsonl",
+			active: false,
+			isActive: true,
+		});
+		assert.equal(lifecycle.activity, "idle");
+		assert.equal(lifecycle.addressable, false);
+		assert.equal(lifecycle.canQueueFollowUp, false);
 		assert.equal(lifecycle.canResume, false);
 		assert.match(lifecycle.continuationText, /not active/i);
 	});

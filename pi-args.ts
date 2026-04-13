@@ -5,6 +5,39 @@ import * as path from "node:path";
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TASK_ARG_LIMIT = 8000;
 
+export interface ParentSkillCliOptions {
+	noSkills: boolean;
+	skillPaths: string[];
+}
+
+export function getParentSkillCliOptions(argv: string[] = process.argv): ParentSkillCliOptions {
+	const skillPaths: string[] = [];
+	let noSkills = false;
+	for (let i = 0; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === "--no-skills") {
+			noSkills = true;
+			continue;
+		}
+		if (arg === "--skills") {
+			const value = argv[i + 1];
+			if (value) {
+				skillPaths.push(...value.split(",").map((entry) => entry.trim()).filter(Boolean));
+				i += 1;
+			}
+			continue;
+		}
+		if (arg.startsWith("--skills=")) {
+			const value = arg.slice("--skills=".length);
+			skillPaths.push(...value.split(",").map((entry) => entry.trim()).filter(Boolean));
+		}
+	}
+	return {
+		noSkills,
+		skillPaths: Array.from(new Set(skillPaths)),
+	};
+}
+
 export interface BuildPiArgsInput {
 	baseArgs: string[];
 	task: string;
@@ -18,6 +51,8 @@ export interface BuildPiArgsInput {
 	tools?: string[];
 	extensions?: string[];
 	skills?: string[];
+	inheritNoSkills?: boolean;
+	inheritedSkillPaths?: string[];
 	systemPrompt?: string | null;
 	mcpDirectTools?: string[];
 	promptFileStem?: string;
@@ -85,8 +120,12 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		}
 	}
 
-	if ((input.skills?.length ?? 0) > 0) {
+	const hasExplicitSkillOverride = (input.skills?.length ?? 0) > 0;
+	if (input.inheritNoSkills || hasExplicitSkillOverride) {
 		args.push("--no-skills");
+	}
+	if (!hasExplicitSkillOverride && (input.inheritedSkillPaths?.length ?? 0) > 0) {
+		args.push("--skills", input.inheritedSkillPaths!.join(","));
 	}
 
 	let tempDir: string | undefined;

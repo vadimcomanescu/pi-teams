@@ -9,16 +9,30 @@ import { TaskStore, type UnassignTasksForOwnerResult } from "./task-store.js";
 import { describeTeammateLifecycle, type TeammateLifecycle } from "./teammate-lifecycle.js";
 
 export type TeamState = "active" | "shutdown" | "orphaned";
+export type TeammateMode = "default" | "plan" | "execute";
+
+const VALID_TEAMMATE_MODES: TeammateMode[] = ["default", "plan", "execute"];
+
+function normalizeTeammateMode(mode: string | undefined): TeammateMode {
+	if (!mode) return "default";
+	const normalized = mode.trim().toLowerCase();
+	if (normalized === "default" || normalized === "plan" || normalized === "execute") {
+		return normalized;
+	}
+	throw new Error(`Invalid teammate mode: ${mode}. Valid modes: ${VALID_TEAMMATE_MODES.join(", ")}`);
+}
 
 export interface TeamMember {
 	name: string;
 	agentId: string;
 	agentType: string;
 	model?: string;
+	mode?: TeammateMode;
 	status: AgentStatus;
 	cwd: string;
 	lastSummary?: string;
 	pendingShutdownRequestId?: string;
+	isActive?: boolean;
 	updatedAt: number;
 }
 
@@ -36,6 +50,7 @@ export interface Team {
 export interface CheckedTeammate {
 	teamName: string;
 	effectiveModel?: string;
+	mode: TeammateMode;
 	status: AgentStatus;
 	lastSummary?: string;
 	member: TeamMember;
@@ -55,6 +70,11 @@ export interface SessionCleanupResult {
 	teamNames: string[];
 	cleanedTeams: string[];
 	failures: Array<{ teamName: string; step: "stop" | "delete"; message: string }>;
+}
+
+export interface OrphanCleanupResult {
+	removedTeams: string[];
+	failures: Array<{ teamName: string; message: string }>;
 }
 
 export interface ShutdownResponseOutcome {
@@ -100,6 +120,7 @@ export class TeamManager {
 	private readonly now: () => number;
 	private readonly onMemberStopped?: TeamManagerOptions["onMemberStopped"];
 	private readonly rootLockPath: string;
+	private readonly pendingTerminalByAgentId = new Map<string, { status: AgentStatus; summary?: string }>();
 
 	constructor(options: TeamManagerOptions) {
 		this.options = options;
@@ -150,7 +171,7 @@ export class TeamManager {
 			if (!parsed.name || !parsed.leadSessionId || !Array.isArray(parsed.members) || !parsed.state) {
 				throw new Error("missing required team fields");
 			}
-			return parsed;
+			return this.normalizeTeam(parsed);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new TeamConfigError(`Corrupt team config: ${configPath}. ${message}`);
@@ -170,6 +191,21 @@ export class TeamManager {
 
 	private writeTeam(team: Team): void {
 		writeJsonAtomically(this.getConfigPath(team.name), team);
+	}
+
+	private normalizeMember(member: TeamMember): TeamMember {
+		return {
+			...member,
+			mode: normalizeTeammateMode(member.mode),
+			isActive: member.status === "running" ? (member.isActive ?? true) : false,
+		};
+	}
+
+	private normalizeTeam(team: Team): Team {
+		return {
+			...team,
+			members: team.members.map((member) => this.normalizeMember(member)),
+		};
 	}
 
 	private listConfigPaths(): string[] {
@@ -202,6 +238,13 @@ export class TeamManager {
 
 	private isTeammateRuntime(): boolean {
 		return Boolean(this.options.getCurrentTeammateTeamName?.());
+	}
+
+	getCurrentTeammateIdentity(): { teamName: string; teammateName: string } | null {
+		const teamName = this.options.getCurrentTeammateTeamName?.() ?? null;
+		const teammateName = this.options.getCurrentTeammateName?.() ?? null;
+		if (!teamName || !teammateName) return null;
+		return { teamName, teammateName };
 	}
 
 	private rememberLeadTeamContext(teamName: string): void {
@@ -323,6 +366,7 @@ export class TeamManager {
 					team.state = team.leadSessionId === sessionId ? "shutdown" : "orphaned";
 					team.shutdownAt = this.now();
 					for (const member of team.members) {
+						member.isActive = false;
 						if (member.status === "running") {
 							member.status = team.state === "orphaned" ? "failed" : "stopped";
 							member.updatedAt = this.now();
@@ -406,12 +450,26 @@ export class TeamManager {
 			if (existingIndex !== -1 && team.members[existingIndex]?.status === "running" && team.members[existingIndex]?.agentId !== member.agentId) {
 				throw new Error(`Teammate name already active in team "${teamName}": ${member.name}`);
 			}
+			const existingMember = existingIndex !== -1 ? team.members[existingIndex] : undefined;
+			const live = this.options.registry.resolve(member.agentId) ?? this.options.registry.resolve(member.name);
+			const pendingTerminal = this.pendingTerminalByAgentId.get(member.agentId);
+			const reconciledStatus = pendingTerminal?.status ?? live?.status ?? member.status;
+			const terminalSummary = pendingTerminal?.summary
+				?? (reconciledStatus !== "running" ? live?.result : undefined);
 			const persisted: TeamMember = {
 				...member,
+				status: reconciledStatus,
+				mode: normalizeTeammateMode(member.mode ?? existingMember?.mode),
 				updatedAt: this.now(),
-				lastSummary: existingIndex !== -1 ? team.members[existingIndex]?.lastSummary : member.lastSummary,
+				lastSummary: terminalSummary
+					?? existingMember?.lastSummary
+					?? member.lastSummary,
 				pendingShutdownRequestId: undefined,
+				isActive: reconciledStatus === "running" ? (member.isActive ?? true) : false,
 			};
+			if (pendingTerminal) {
+				this.pendingTerminalByAgentId.delete(member.agentId);
+			}
 			if (existingIndex !== -1) {
 				team.members[existingIndex] = persisted;
 			} else {
@@ -456,21 +514,73 @@ export class TeamManager {
 		}
 		const live = this.resolveLiveTeammate(member);
 		const resolvedStatus = member.status !== "running" ? member.status : (live?.status ?? member.status);
+		const isActive = team.state === "active" && resolvedStatus === "running" && (member.isActive ?? true);
+		const sessionFile = live?.sessionFile;
+		const mode = normalizeTeammateMode(member.mode);
 		return {
 			teamName: team.name,
 			effectiveModel: member.model ?? team.defaultModel,
+			mode,
 			status: resolvedStatus,
 			lastSummary: live?.result ?? member.lastSummary,
-			member: live ? { ...member, agentId: live.id, status: resolvedStatus } : member,
+			member: live
+				? { ...member, agentId: live.id, mode, status: resolvedStatus, isActive }
+				: { ...member, mode, status: resolvedStatus, isActive },
 			state: team.state,
-			sessionFile: live?.sessionFile,
+			sessionFile,
 			lifecycle: describeTeammateLifecycle({
 				status: resolvedStatus,
-				sessionFile: live?.sessionFile,
+				sessionFile,
 				acceptsFollowUps: Boolean(live?.rpcHandle),
 				active: team.state === "active",
+				isActive,
 			}),
 		};
+	}
+
+	setTeammateMode(teamName: string | undefined, teammateName: string, mode: string): TeamMember {
+		return this.withRootLock(() => {
+			const team = this.assertLeadControl(teamName);
+			const normalizedMode = normalizeTeammateMode(mode);
+			const index = this.findMemberIndexByName(team, teammateName);
+			if (index === -1) {
+				throw new Error(`Teammate not found in team "${team.name}": ${teammateName}`);
+			}
+			const member = team.members[index]!;
+			if (member.mode === normalizedMode) {
+				return member;
+			}
+			member.mode = normalizedMode;
+			member.updatedAt = this.now();
+			member.lastSummary = `Mode set to ${normalizedMode}`;
+			this.writeTeam(team);
+			return member;
+		});
+	}
+
+	setTeammateModeForAgent(agentId: string, mode: string): TeamMember {
+		return this.withRootLock(() => {
+			const normalizedMode = normalizeTeammateMode(mode);
+			const sessionId = this.requireLeadSessionId();
+			for (const team of this.listTeams()) {
+				const member = team.members.find((entry) => entry.agentId === agentId);
+				if (!member) continue;
+				if (team.leadSessionId !== sessionId) {
+					throw new Error(`Only the lead session may mutate team "${team.name}".`);
+				}
+				if (team.state !== "active") {
+					throw new Error(`Team "${team.name}" is not active.`);
+				}
+				if (member.mode !== normalizedMode) {
+					member.mode = normalizedMode;
+					member.updatedAt = this.now();
+					member.lastSummary = `Mode set to ${normalizedMode}`;
+					this.writeTeam(team);
+				}
+				return member;
+			}
+			throw new Error(`Teammate not found for mode update: ${agentId}`);
+		});
 	}
 
 	private shouldIgnoreTerminalUpdate(current: AgentStatus, next: AgentStatus, teamState: TeamState): boolean {
@@ -495,6 +605,7 @@ export class TeamManager {
 					return;
 				}
 				member.status = status;
+				member.isActive = status === "running" && team.state === "active";
 				member.updatedAt = this.now();
 				member.pendingShutdownRequestId = undefined;
 				if (lastSummary !== undefined) {
@@ -502,6 +613,30 @@ export class TeamManager {
 				}
 				if (status === "stopped" || status === "timed_out" || status === "failed") {
 					this.unassignTasksForMember(team.name, member);
+				}
+				this.writeTeam(team);
+				return;
+			}
+			if (status !== "running") {
+				this.pendingTerminalByAgentId.set(agentId, { status, summary: lastSummary });
+			}
+		});
+	}
+
+	recordTeammateActivity(agentId: string, isActive: boolean, lastSummary?: string): void {
+		this.withRootLock(() => {
+			for (const team of this.listTeams()) {
+				const member = team.members.find((entry) => entry.agentId === agentId);
+				if (!member) continue;
+				const nextIsActive = team.state === "active" && member.status === "running" && isActive;
+				const summaryChanged = lastSummary !== undefined && member.lastSummary !== lastSummary;
+				if (member.isActive === nextIsActive && !summaryChanged) {
+					return;
+				}
+				member.isActive = nextIsActive;
+				member.updatedAt = this.now();
+				if (lastSummary !== undefined) {
+					member.lastSummary = lastSummary;
 				}
 				this.writeTeam(team);
 				return;
@@ -603,6 +738,7 @@ export class TeamManager {
 				}
 				const unassigned = this.unassignTasksForMember(team.name, member);
 				member.status = "stopped";
+				member.isActive = false;
 				member.lastSummary = input.summary?.trim() || "Graceful shutdown approved";
 				this.writeTeam(team);
 				return {
@@ -633,6 +769,13 @@ export class TeamManager {
 					summary: member.lastSummary ?? fallbackSummary,
 				};
 			}
+			const pending = this.pendingTerminalByAgentId.get(agentId);
+			if (pending) {
+				return {
+					status: pending.status,
+					summary: pending.summary ?? fallbackSummary,
+				};
+			}
 			return { status: fallbackStatus, summary: fallbackSummary };
 		});
 	}
@@ -649,6 +792,7 @@ export class TeamManager {
 			for (const member of team.members) {
 				const live = this.options.registry.resolve(member.agentId);
 				const unassigned = this.unassignTasksForMember(team.name, member);
+				member.isActive = false;
 				if (live?.status === "running") {
 					this.options.registry.stopAgent(member.agentId);
 					member.status = "stopped";
@@ -733,6 +877,7 @@ export class TeamManager {
 				}
 				for (const member of team.members) {
 					const live = this.resolveLiveTeammate(member);
+					member.isActive = false;
 					if ((live?.status ?? member.status) !== "running") continue;
 					try {
 						this.options.registry.stopAgent(member.agentId);
@@ -769,6 +914,48 @@ export class TeamManager {
 				console.warn(`[pi-teams] cleanupSessionTeams ${failure.step} failed for ${failure.teamName}: ${failure.message}`);
 			}
 			return { teamNames, cleanedTeams, failures };
+		});
+	}
+
+	cleanupOrphanedTeams(maxAgeMs: number): OrphanCleanupResult {
+		return this.withRootLock(() => {
+			const thresholdMs = Number.isFinite(maxAgeMs) ? Math.max(0, maxAgeMs) : 0;
+			const now = this.now();
+			const activeTeamName = this.getActiveTeam()?.name;
+			const removedTeams: string[] = [];
+			const failures: Array<{ teamName: string; message: string }> = [];
+
+			for (const configPath of this.listConfigPaths()) {
+				const fallbackTeamName = path.basename(path.dirname(configPath));
+				let team: Team | undefined;
+				try {
+					team = this.readTeamFile(configPath);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					failures.push({ teamName: fallbackTeamName, message });
+					continue;
+				}
+				if (!team) continue;
+				if (team.name === activeTeamName) continue;
+				if (team.state !== "orphaned") continue;
+
+				const anchorMs = typeof team.shutdownAt === "number" ? team.shutdownAt : team.createdAt;
+				if (!Number.isFinite(anchorMs)) continue;
+				if (now - anchorMs <= thresholdMs) continue;
+
+				try {
+					this.deletePersistedTeam(team.name);
+					removedTeams.push(team.name);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					failures.push({ teamName: team.name, message });
+				}
+			}
+
+			if (removedTeams.length > 0) {
+				console.info(`[pi-teams] orphan cleanup removed ${removedTeams.length} team(s): ${removedTeams.join(", ")}`);
+			}
+			return { removedTeams, failures };
 		});
 	}
 

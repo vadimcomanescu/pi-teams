@@ -5,6 +5,7 @@ export interface TeammateLifecycleInput {
 	sessionFile?: string;
 	acceptsFollowUps?: boolean;
 	active?: boolean;
+	isActive?: boolean;
 }
 
 export interface TeammateLifecycle {
@@ -19,7 +20,8 @@ export function describeTeammateLifecycle(input: TeammateLifecycleInput): Teamma
 	const active = input.active ?? true;
 	const acceptsFollowUps = input.acceptsFollowUps === true;
 	const hasSession = Boolean(input.sessionFile);
-	const activity = input.status === "running" ? "running" : "idle";
+	const isActuallyActive = input.status === "running" && active && (input.isActive ?? true);
+	const activity = isActuallyActive ? "running" : "idle";
 	const canQueueFollowUp = input.status === "running" && acceptsFollowUps && active;
 	const canResume = input.status !== "running" && hasSession && active;
 	const addressable = canQueueFollowUp || canResume;
@@ -50,7 +52,7 @@ export function describeTeammateLifecycle(input: TeammateLifecycleInput): Teamma
 			addressable,
 			canQueueFollowUp,
 			canResume,
-			continuationText: "this worker is running in background mode and does not accept follow-up messages",
+			continuationText: "this worker is running without a follow-up channel, wait for completion or stop it",
 		};
 	}
 

@@ -51,10 +51,7 @@ function makeState(cwd: string) {
 	return {
 		baseCwd: cwd,
 		currentSessionId: null,
-		asyncJobs: new Map(),
-		cleanupTimers: new Map(),
 		lastUiContext: null,
-		poller: null,
 		completionSeen: new Map(),
 		watcher: null,
 		watcherRestartTimer: null,
@@ -94,7 +91,6 @@ describe("fork context execution wiring", { skip: !available ? "team executor no
 				pi: { events: { emit: () => {} } },
 				state,
 				config: {},
-				asyncByDefault: false,
 				tempArtifactsDir: tempDir,
 				getTeamSessionRoot: () => tempDir,
 				expandTilde: (p: string) => p,

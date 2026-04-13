@@ -6,104 +6,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
-import type { AsyncStatus, DisplayItem, ErrorInfo } from "./types.js";
+import type { DisplayItem, ErrorInfo } from "./types.js";
 
 // ============================================================================
 // File System Utilities
 // ============================================================================
 
-// Cache for status file reads - avoid re-reading unchanged files
-const statusCache = new Map<string, { mtime: number; status: AsyncStatus }>();
-
-/**
- * Read async job status from disk (with mtime-based caching)
- */
-export function readStatus(asyncDir: string): AsyncStatus | null {
-	const statusPath = path.join(asyncDir, "status.json");
-	try {
-		const stat = fs.statSync(statusPath);
-		const cached = statusCache.get(statusPath);
-		if (cached && cached.mtime === stat.mtimeMs) {
-			return cached.status;
-		}
-		const content = fs.readFileSync(statusPath, "utf-8");
-		const status = JSON.parse(content) as AsyncStatus;
-		statusCache.set(statusPath, { mtime: stat.mtimeMs, status });
-		// Limit cache size to prevent memory leaks
-		if (statusCache.size > 50) {
-			const firstKey = statusCache.keys().next().value;
-			if (firstKey) statusCache.delete(firstKey);
-		}
-		return status;
-	} catch {
-		return null;
-	}
-}
-
-// Cache for output tail reads - avoid re-reading unchanged files
-const outputTailCache = new Map<string, { mtime: number; size: number; lines: string[] }>();
-
-/**
- * Get the last N lines from an output file (with mtime/size-based caching)
- */
-export function getOutputTail(outputFile: string | undefined, maxLines: number = 3): string[] {
-	if (!outputFile) return [];
-	let fd: number | null = null;
-	try {
-		const stat = fs.statSync(outputFile);
-		if (stat.size === 0) return [];
-
-		// Check cache using both mtime and size (size changes more frequently during writes)
-		const cached = outputTailCache.get(outputFile);
-		if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
-			return cached.lines;
-		}
-
-		const tailBytes = 4096;
-		const start = Math.max(0, stat.size - tailBytes);
-		fd = fs.openSync(outputFile, "r");
-		const buffer = Buffer.alloc(Math.min(tailBytes, stat.size));
-		fs.readSync(fd, buffer, 0, buffer.length, start);
-		const content = buffer.toString("utf-8");
-		const allLines = content.split("\n").filter((l) => l.trim());
-		const lines = allLines.slice(-maxLines).map((l) => l.slice(0, 120) + (l.length > 120 ? "..." : ""));
-
-		// Cache the result
-		outputTailCache.set(outputFile, { mtime: stat.mtimeMs, size: stat.size, lines });
-		// Limit cache size
-		if (outputTailCache.size > 20) {
-			const firstKey = outputTailCache.keys().next().value;
-			if (firstKey) outputTailCache.delete(firstKey);
-		}
-
-		return lines;
-	} catch {
-		return [];
-	} finally {
-		if (fd !== null) {
-			try {
-				fs.closeSync(fd);
-			} catch {}
-		}
-	}
-}
-
-/**
- * Get human-readable last activity time for a file
- */
-export function getLastActivity(outputFile: string | undefined): string {
-	if (!outputFile) return "";
-	try {
-		// Single stat call - throws if file doesn't exist
-		const stat = fs.statSync(outputFile);
-		const ago = Date.now() - stat.mtimeMs;
-		if (ago < 1000) return "active now";
-		if (ago < 60000) return `active ${Math.floor(ago / 1000)}s ago`;
-		return `active ${Math.floor(ago / 60000)}m ago`;
-	} catch {
-		return "";
-	}
-}
 
 /**
  * Find a file/directory by prefix in a directory

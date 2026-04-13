@@ -129,6 +129,7 @@ export function createSpawnTeammateTool(
 					model: spawned.effectiveModel,
 					status: "running",
 					cwd: params.cwd,
+					lastSummary: params.prompt,
 				});
 
 				return {
@@ -169,8 +170,10 @@ export function createCheckTeammateTool(
 							text: [
 								`Team: ${status.teamName}`,
 								`Teammate: ${status.member.name}`,
+								`Mode: ${status.mode}`,
 								`Status: ${status.status}`,
 								`Activity: ${status.lifecycle.activity}`,
+								`Is active: ${status.member.isActive ? "yes" : "no"}`,
 								`Addressable: ${status.lifecycle.addressable ? "yes" : "no"}`,
 								status.effectiveModel ? `Model: ${status.effectiveModel}` : undefined,
 								status.lastSummary ? `Summary: ${status.lastSummary}` : undefined,
@@ -182,8 +185,10 @@ export function createCheckTeammateTool(
 					details: {
 						team_name: status.teamName,
 						name: status.member.name,
+						mode: status.mode,
 						status: status.status,
 						activity: status.lifecycle.activity,
+						is_active: status.member.isActive,
 						addressable: status.lifecycle.addressable,
 						can_resume: status.lifecycle.canResume,
 						can_queue_follow_up: status.lifecycle.canQueueFollowUp,
@@ -240,7 +245,7 @@ export function createTeamDeleteTool(
 	return {
 		name: "team_delete",
 		label: "Team Delete",
-		description: "Physically delete the current lead team after all teammates stop",
+		description: "Physically delete the current lead team once non-lead teammates are no longer active",
 		parameters: TeamDeleteParams,
 		async execute() {
 			try {

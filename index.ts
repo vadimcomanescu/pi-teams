@@ -1,15 +1,9 @@
 /**
  * Team Tool
  *
- * Full-featured worker delegation with sync and async modes.
- * - Sync (default): Streams output, renders markdown, tracks usage
- * - Async: Background execution, emits events when done
+ * Team-first orchestration with a single team lifecycle surface.
  *
  * Modes: single (agent + task), parallel (tasks[]), chain (chain[] with {previous})
- * Toggle: async parameter (default: false, configurable via config.json)
- *
- * Config file: ~/.pi/agent/extensions/pi-teams/config.json
- *   { "asyncByDefault": true }
  */
 
 import * as fs from "node:fs";
@@ -21,11 +15,17 @@ import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { discoverAgents } from "./agents.js";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.js";
 import { cleanupOldChainDirs } from "./settings.js";
-import { renderWidget, renderTeamResult } from "./render.js";
-import { TeamParams, StatusParams } from "./schemas.js";
-import { findByPrefix, readStatus } from "./utils.js";
+import { renderTeamResult } from "./render.js";
+import { applySnapshotIfChanged, createTeammateWidgetController } from "./teammate-widget-controller.js";
+import {
+	buildLiveWidgetRenderState,
+	clearTeammateWidgets,
+	LEGACY_ASYNC_WIDGET_KEY,
+	TEAMMATE_WIDGET_KEY,
+} from "./teammate-live-widget.js";
+import { TeamParams } from "./schemas.js";
+import { startLeadSessionRuntime } from "./lead-session-runtime.js";
 import { createTeamExecutor } from "./team-executor.js";
-import { createAsyncJobTracker } from "./async-job-tracker.js";
 import { createResultWatcher } from "./result-watcher.js";
 import { registerSlashCommands } from "./slash-commands.js";
 import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge.js";
@@ -35,11 +35,9 @@ import {
 	type Details,
 	type ExtensionConfig,
 	type TeamState,
-	ASYNC_DIR,
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
 	SLASH_RESULT_TYPE,
-	WIDGET_KEY,
 } from "./types.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { clearLeaderTeamName } from "./leader-team-state.js";
@@ -55,6 +53,7 @@ import {
 import { getCoordinatorSystemPrompt } from "./coordinator-prompt.js";
 import { createTaskStopTool } from "./task-stop-tool.js";
 import { createSendMessageTool } from "./send-message-tool.js";
+import { markMailboxMessagesRead, readUnreadMailboxMessages } from "./teammate-mailbox.js";
 import { createResumeAgent } from "./teammate-continuation.js";
 import { createLifecycleDedupe } from "./lifecycle-dedupe.js";
 import { TeamManager } from "./team-manager.js";
@@ -169,9 +168,10 @@ function createSlashResultComponent(
 	return container;
 }
 
+const TEAMMATE_WIDGET_PROGRESS_THROTTLE_MS = 1000;
+
 export default function registerTeamExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(RESULTS_DIR);
-	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
 	const runtimeRole = getRuntimeRole();
@@ -197,17 +197,16 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 	});
 
 	const config = loadConfig();
-	const asyncByDefault = config.asyncByDefault === true;
-	const tempArtifactsDir = getArtifactsDir(null);
+	const orphanCleanupMaxAgeHours = Number.isFinite(config.orphanCleanupMaxAgeHours)
+		? Math.max(1, Number(config.orphanCleanupMaxAgeHours))
+		: 72;
+	const orphanCleanupMaxAgeMs = orphanCleanupMaxAgeHours * 60 * 60 * 1000;
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
 
 	const state: TeamState = {
 		baseCwd: process.cwd(),
 		currentSessionId: null,
-		asyncJobs: new Map(),
-		cleanupTimers: new Map(),
 		lastUiContext: null,
-		poller: null,
 		completionSeen: new Map(),
 		watcher: null,
 		watcherRestartTimer: null,
@@ -273,48 +272,194 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 		},
 	});
 	const createTaskStore = (teamName: string) => new TaskStore(teamName, teamManager.getTasksPath(teamName));
+	const teammateWidgetSnapshot = { current: null as string | null };
+	const orphanCleanupWarned = new Set<string>();
+	const TEAMMATE_WIDGET_ANIMATION_INTERVAL_MS = 900;
+	let teammateWidgetFrame = 0;
+	let teammateWidgetAnimationTimer: ReturnType<typeof setInterval> | null = null;
 
-	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(state, ASYNC_DIR);
+	const stopTeammateWidgetAnimation = () => {
+		if (!teammateWidgetAnimationTimer) return;
+		clearInterval(teammateWidgetAnimationTimer);
+		teammateWidgetAnimationTimer = null;
+	};
+
+	const renderTeammateWidget = () => {
+		if (!isLeadRuntime) return;
+		const ctx = state.lastUiContext;
+		if (!ctx?.hasUI) return;
+		const result = buildLiveWidgetRenderState({
+			team: teamManager.getActiveTeam(),
+			checkTeammate: (teamName, memberName) => teamManager.checkTeammate(teamName, memberName),
+			resolveAgent: (agentIdOrName) => registry.resolve(agentIdOrName),
+			nowMs: Date.now(),
+			frame: teammateWidgetFrame,
+		});
+		teammateWidgetFrame = result.nextFrame;
+		syncTeammateWidgetAnimation(result.shouldAnimate);
+		applySnapshotIfChanged(result.snapshot, teammateWidgetSnapshot, () => {
+			ctx.ui.setWidget(TEAMMATE_WIDGET_KEY, result.lines && result.lines.length > 0 ? result.lines : undefined);
+			ctx.ui.setWidget(LEGACY_ASYNC_WIDGET_KEY, undefined);
+		});
+	};
+
+	const teammateWidgetController = createTeammateWidgetController({
+		progressThrottleMs: TEAMMATE_WIDGET_PROGRESS_THROTTLE_MS,
+		render: renderTeammateWidget,
+	});
+
+	const scheduleTeammateWidgetRender = (kind: "state" | "progress" = "state") => {
+		if (!isLeadRuntime) return;
+		teammateWidgetController.schedule(kind);
+	};
+
+	const syncTeammateWidgetAnimation = (shouldAnimate: boolean) => {
+		if (!isLeadRuntime) {
+			stopTeammateWidgetAnimation();
+			return;
+		}
+		if (!shouldAnimate) {
+			stopTeammateWidgetAnimation();
+			return;
+		}
+		if (teammateWidgetAnimationTimer) return;
+		teammateWidgetAnimationTimer = setInterval(() => {
+			scheduleTeammateWidgetRender("progress");
+		}, TEAMMATE_WIDGET_ANIMATION_INTERVAL_MS);
+		teammateWidgetAnimationTimer.unref?.();
+	};
+
+	const clearTeammateWidget = () => {
+		teammateWidgetController.clear();
+		stopTeammateWidgetAnimation();
+		applySnapshotIfChanged(null, teammateWidgetSnapshot, () => {
+			if (state.lastUiContext?.hasUI) {
+				clearTeammateWidgets(state.lastUiContext.ui);
+			}
+		});
+	};
+
+	const notifyTeam = (content: string) => {
+		pi.sendMessage(
+			{ customType: "team-notify", content, display: true },
+			{ triggerTurn: true, deliverAs: "followUp" },
+		);
+	};
+
+	const TEAM_INBOX_POLL_INTERVAL_MS = 1000;
+	let teamInboxPoller: ReturnType<typeof setInterval> | null = null;
+
+	const stopTeamInboxPoller = () => {
+		if (!teamInboxPoller) return;
+		clearInterval(teamInboxPoller);
+		teamInboxPoller = null;
+	};
+
+	const processLeadMailbox = (teamName: string) => {
+		const teamDir = teamManager.getTeamDir(teamName);
+		const unread = readUnreadMailboxMessages(teamDir, "lead");
+		if (unread.length === 0) return;
+		const team = teamManager.getTeam(teamName);
+		const acknowledged: string[] = [];
+		for (const message of unread) {
+			if (message.payload.type === "shutdown_response") {
+				const sender = message.from.trim().toLowerCase();
+				const member = team?.members.find((entry) => entry.name.toLowerCase() === sender);
+				if (!member) {
+					notifyTeam(`Ignored shutdown response from unknown teammate "${message.from}".`);
+					acknowledged.push(message.id);
+					continue;
+				}
+				try {
+					const outcome = teamManager.handleShutdownResponseForAgent(member.agentId, {
+						requestId: message.payload.requestId,
+						approve: message.payload.approve,
+						reason: message.payload.reason,
+					});
+					if (outcome.approved) {
+						registry.stopAgent(member.agentId);
+						emitTeamCompletion({
+							id: member.agentId,
+							agent: member.agentType,
+							name: member.name,
+							status: "stopped",
+							summary: appendUnassignedTaskSummary(outcome.summary, outcome.unassigned),
+						});
+					} else {
+						notifyTeam(`Graceful shutdown rejected by "${outcome.member.name}": ${outcome.reason}`);
+					}
+				} catch (error) {
+					notifyTeam(`Invalid shutdown response from "${message.from}": ${error instanceof Error ? error.message : String(error)}`);
+				}
+				acknowledged.push(message.id);
+				continue;
+			}
+
+			const summary = message.payload.summary?.trim() || message.payload.text.trim().split("\n")[0] || "(empty message)";
+			notifyTeam(`Inbox message from "${message.from}": ${summary}`);
+			acknowledged.push(message.id);
+		}
+		if (acknowledged.length > 0) {
+			markMailboxMessagesRead(teamDir, "lead", acknowledged);
+		}
+	};
+
+	const processTeammateMailbox = (teamName: string, teammateName: string, agentId: string) => {
+		const teamDir = teamManager.getTeamDir(teamName);
+		const unread = readUnreadMailboxMessages(teamDir, teammateName);
+		if (unread.length === 0) return;
+		const live = registry.resolve(agentId) ?? registry.resolve(teammateName);
+		if (!live?.rpcHandle || live.status !== "running") {
+			return;
+		}
+		const deliveredIds: string[] = [];
+		for (const message of unread) {
+			if (message.payload.type !== "plain_text") {
+				deliveredIds.push(message.id);
+				continue;
+			}
+			try {
+				live.rpcHandle.stdin.write(JSON.stringify({ type: "follow_up", message: message.payload.text }) + "\n");
+				registry.patch(live.id, { lastUpdateAt: Date.now(), result: message.payload.summary ?? message.payload.text });
+				teamManager.recordTeammateActivity(live.id, true, message.payload.summary ?? message.payload.text);
+				deliveredIds.push(message.id);
+			} catch {
+				break;
+			}
+		}
+		if (deliveredIds.length > 0) {
+			markMailboxMessagesRead(teamDir, teammateName, deliveredIds);
+		}
+	};
+
+	const pollTeamMailboxes = () => {
+		if (!isLeadRuntime) return;
+		const team = teamManager.getActiveTeam();
+		if (!team) return;
+		processLeadMailbox(team.name);
+		for (const member of team.members) {
+			if (member.status !== "running") continue;
+			processTeammateMailbox(team.name, member.name, member.agentId);
+		}
+	};
+
+	const startTeamInboxPoller = () => {
+		if (!isLeadRuntime) return;
+		if (teamInboxPoller) return;
+		teamInboxPoller = setInterval(() => {
+			pollTeamMailboxes();
+		}, TEAM_INBOX_POLL_INTERVAL_MS);
+		teamInboxPoller.unref?.();
+	};
+
 	const executor = createTeamExecutor({
 		pi,
 		state,
 		config,
-		asyncByDefault,
-		tempArtifactsDir,
 		getTeamSessionRoot,
 		expandTilde,
 		discoverAgents,
 		registry,
-		onTeammateControlMessage: (payload) => {
-			if (payload.message.type !== "shutdown_response") return;
-			try {
-				const outcome = teamManager.handleShutdownResponseForAgent(payload.agentId, {
-					requestId: payload.message.requestId,
-					approve: payload.message.approve,
-					reason: payload.message.reason,
-				});
-				if (outcome.approved) {
-					registry.stopAgent(payload.agentId);
-					emitTeamCompletion({
-						id: payload.agentId,
-						agent: payload.agentType,
-						name: payload.name,
-						status: "stopped",
-						summary: appendUnassignedTaskSummary(outcome.summary, outcome.unassigned),
-					});
-					return;
-				}
-				pi.sendMessage(
-					{ customType: "team-notify", content: `Graceful shutdown rejected by "${outcome.member.name}": ${outcome.reason}`, display: true },
-					{ triggerTurn: true, deliverAs: "followUp" },
-				);
-			} catch (error) {
-				pi.sendMessage(
-					{ customType: "team-notify", content: `Invalid shutdown response from "${payload.name ?? payload.agentId}": ${error instanceof Error ? error.message : String(error)}`, display: true },
-					{ triggerTurn: true, deliverAs: "followUp" },
-				);
-			}
-		},
 	});
 
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
@@ -341,7 +486,6 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 						tasks: request.tasks,
 						context: request.context,
 						cwd: request.cwd,
-						async: false,
 						clarify: false,
 					},
 					signal,
@@ -357,7 +501,6 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 					context: request.context,
 					cwd: request.cwd,
 					model: request.model,
-					async: false,
 					clarify: false,
 				},
 				signal,
@@ -370,7 +513,7 @@ export default function registerTeamExtension(pi: ExtensionAPI): void {
 	const tool: ToolDefinition<typeof TeamParams, Details> = {
 		name: "team",
 		label: "Team",
-		description: `Delegate to workers or manage agent definitions.
+		description: `Delegate raw agent work or manage agent definitions.
 
 EXECUTION (use exactly ONE mode):
 • SINGLE: { agent, task } - one task
@@ -407,10 +550,9 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 				);
 			}
 			const isParallel = (args.tasks?.length ?? 0) > 0;
-			const asyncLabel = args.async === true && !isParallel ? theme.fg("warning", " [async]") : "";
 			if (args.chain?.length)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("team "))}chain (${args.chain.length})${asyncLabel}`,
+					`${theme.fg("toolTitle", theme.bold("team "))}chain (${args.chain.length})`,
 					0,
 					0,
 				);
@@ -421,7 +563,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 					0,
 				);
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("team "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${theme.fg("toolTitle", theme.bold("team "))}${theme.fg("accent", args.agent || "?")}`,
 				0,
 				0,
 			);
@@ -433,99 +575,7 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 	};
 
-	const statusTool: ToolDefinition<typeof StatusParams, Details> = {
-		name: "team_status",
-		label: "Team Status",
-		description: "Inspect async worker run status and artifacts",
-		parameters: StatusParams,
-
-		async execute(_id, params, _signal, _onUpdate, _ctx) {
-			let asyncDir: string | null = null;
-			let resolvedId = params.id;
-
-			if (params.dir) {
-				asyncDir = path.resolve(params.dir);
-			} else if (params.id) {
-				const direct = path.join(ASYNC_DIR, params.id);
-				if (fs.existsSync(direct)) {
-					asyncDir = direct;
-				} else {
-					const match = findByPrefix(ASYNC_DIR, params.id);
-					if (match) {
-						asyncDir = match;
-						resolvedId = path.basename(match);
-					}
-				}
-			}
-
-			const resultPath =
-				params.id && !asyncDir ? findByPrefix(RESULTS_DIR, params.id, ".json") : null;
-
-			if (!asyncDir && !resultPath) {
-				return {
-					content: [{ type: "text", text: "Async run not found. Provide id or dir." }],
-					isError: true,
-					details: { mode: "single" as const, results: [] },
-				};
-			}
-
-			if (asyncDir) {
-				const status = readStatus(asyncDir);
-				const logPath = path.join(asyncDir, `team-log-${resolvedId ?? "unknown"}.md`);
-				const eventsPath = path.join(asyncDir, "events.jsonl");
-				if (status) {
-					const stepsTotal = status.steps?.length ?? 1;
-					const current = status.currentStep !== undefined ? status.currentStep + 1 : undefined;
-					const stepLine =
-						current !== undefined ? `Step: ${current}/${stepsTotal}` : `Steps: ${stepsTotal}`;
-					const started = new Date(status.startedAt).toISOString();
-					const updated = status.lastUpdate ? new Date(status.lastUpdate).toISOString() : "n/a";
-
-					const lines = [
-						`Run: ${status.runId}`,
-						`State: ${status.state}`,
-						`Mode: ${status.mode}`,
-						stepLine,
-						`Started: ${started}`,
-						`Updated: ${updated}`,
-						`Dir: ${asyncDir}`,
-					];
-					if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
-					if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
-					if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
-
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-				}
-			}
-
-			if (resultPath) {
-				try {
-					const raw = fs.readFileSync(resultPath, "utf-8");
-					const data = JSON.parse(raw) as { id?: string; success?: boolean; summary?: string };
-					const status = data.success ? "complete" : "failed";
-					const lines = [`Run: ${data.id ?? params.id}`, `State: ${status}`, `Result: ${resultPath}`];
-					if (data.summary) lines.push("", data.summary);
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					return {
-						content: [{ type: "text", text: `Failed to read async result file: ${message}` }],
-						isError: true,
-						details: { mode: "single" as const, results: [] },
-					};
-				}
-			}
-
-			return {
-				content: [{ type: "text", text: "Status file not found." }],
-				isError: true,
-				details: { mode: "single" as const, results: [] },
-			};
-		},
-	};
-
 	pi.registerTool(tool);
-	pi.registerTool(statusTool);
 
 	pi.registerTool(createCheckTeammateTool(teamManager));
 	pi.registerTool(createTaskListTool({ teamManager, createTaskStore }));
@@ -572,7 +622,6 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 					cwd: request.cwd,
 					model: request.effectiveModel,
 					clarify: false,
-					async: false,
 					runtimeRole: "teammate",
 					teamMetadata: {
 						teamName: request.teamName,
@@ -605,21 +654,24 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 	const handleAgentStartedEvent = (data: unknown) => {
 		const d = data as { id?: string; agent?: string; name?: string; task?: string; _coordinatorManaged?: boolean };
 		if (!d.id || !lifecycleDedupe.shouldProcess(`started:${d.id}`)) return;
-		handleStarted(data);
-		if (!d._coordinatorManaged && !registry.resolve(d.id)) {
-			try {
-				registry.register({
-					id: d.id,
-					name: d.name,
-					agentType: d.agent ?? "unknown",
-					task: d.task ?? "",
-					status: "running",
-					startTime: Date.now(),
-				});
-			} catch {
-				// Name collision or duplicate ID
+		if (!d._coordinatorManaged) {
+			if (!registry.resolve(d.id)) {
+				try {
+					registry.register({
+						id: d.id,
+						name: d.name,
+						agentType: d.agent ?? "unknown",
+						task: d.task ?? "",
+						status: "running",
+						startTime: Date.now(),
+						lastUpdateAt: Date.now(),
+					});
+				} catch {
+					// Name collision or duplicate ID
+				}
 			}
 		}
+		scheduleTeammateWidgetRender("state");
 	};
 	const handleAgentCompleteEvent = (data: unknown) => {
 		const d = data as { id?: string; success?: boolean; summary?: string; status?: "completed" | "failed" | "stopped" | "timed_out" };
@@ -629,20 +681,64 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		const status = resolved.status;
 		const summary = resolved.summary;
 		if (!lifecycleDedupe.shouldProcess(`complete:${d.id}:${status}`)) return;
-		handleComplete({ ...d, success: status === "completed", status, summary });
 		registry.updateStatus(d.id, status, summary);
+		registry.patch(d.id, { lastUpdateAt: Date.now() });
 		teamManager.recordTeammateStatus(d.id, status, summary);
+		scheduleTeammateWidgetRender("state");
+	};
+	const handleTeammateIdleEvent = (data: unknown) => {
+		const d = data as { agentId?: string; summary?: string };
+		if (!d.agentId) return;
+		teamManager.recordTeammateActivity(d.agentId, false, d.summary);
+		registry.patch(d.agentId, {
+			result: d.summary,
+			lastUpdateAt: Date.now(),
+		});
+		scheduleTeammateWidgetRender("state");
+	};
+	const handleTeammateProgressEvent = (data: unknown) => {
+		const d = data as {
+			agentId?: string;
+			summary?: string;
+			currentTool?: string;
+			recentOutput?: string[];
+			task?: string;
+			toolCount?: number;
+			tokens?: number;
+		};
+		if (!d.agentId) return;
+		const summary = d.summary?.trim();
+		const fallbackSummary = summary && summary.length > 0 ? summary : d.task;
+		const patch: {
+			currentTool?: string;
+			recentOutput?: string[];
+			result?: string;
+			lastUpdateAt: number;
+			toolCount?: number;
+			tokens?: number;
+		} = {
+			currentTool: d.currentTool,
+			recentOutput: d.recentOutput?.slice(-5),
+			result: fallbackSummary,
+			lastUpdateAt: Date.now(),
+		};
+		if (typeof d.toolCount === "number") patch.toolCount = d.toolCount;
+		if (typeof d.tokens === "number") patch.tokens = d.tokens;
+		teamManager.recordTeammateActivity(d.agentId, true, fallbackSummary);
+		registry.patch(d.agentId, patch);
+		scheduleTeammateWidgetRender("progress");
 	};
 	pi.events.on("team:started", handleAgentStartedEvent);
 	pi.events.on("team:complete", handleAgentCompleteEvent);
+	pi.events.on("team:teammate-idle", handleTeammateIdleEvent);
+	pi.events.on("team:teammate-progress", handleTeammateProgressEvent);
 
 	pi.on("tool_result", (event, ctx) => {
 		if (event.toolName !== "team") return;
 		if (!ctx.hasUI) return;
 		state.lastUiContext = ctx;
-		if (state.asyncJobs.size > 0) {
-			renderWidget(ctx, Array.from(state.asyncJobs.values()));
-			ensurePoller();
+		if (isLeadRuntime) {
+			scheduleTeammateWidgetRender("state");
 		}
 	});
 
@@ -662,25 +758,52 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		state.currentSessionId = ctx.sessionManager.getSessionFile() ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		state.lastUiContext = ctx;
 		cleanupSessionArtifacts(ctx);
-		resetJobs(ctx);
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
+		if (ctx.hasUI) {
+			clearTeammateWidgets(ctx.ui);
+		}
+		if (isLeadRuntime) {
+			clearTeammateWidget();
+		}
 	};
 
-	pi.on("session_start", (_event, ctx) => {
-		resetSessionState(ctx);
-		setCoordinatorMode(isLeadRuntime);
-		if (isLeadRuntime) {
-			teamManager.bootstrap();
-			registry.startTimeoutSweeper(getCoordinatorSettings().workerTimeoutMs, 30_000, (agent) => {
+	const runStartupOrphanCleanup = () => {
+		if (!isLeadRuntime) return;
+		const result = teamManager.cleanupOrphanedTeams(orphanCleanupMaxAgeMs);
+		for (const failure of result.failures) {
+			if (failure.message.startsWith("Corrupt team config:")) continue;
+			const warningKey = `${failure.teamName}:${failure.message}`;
+			if (orphanCleanupWarned.has(warningKey)) continue;
+			orphanCleanupWarned.add(warningKey);
+			console.warn(`[pi-teams] orphan cleanup issue for ${failure.teamName}: ${failure.message}`);
+		}
+	};
+
+	const startLeadSessionServices = () => {
+		const timeoutMs = getCoordinatorSettings().workerTimeoutMs;
+		startLeadSessionRuntime({
+			bootstrapTeamManager: () => teamManager.bootstrap(),
+			runStartupOrphanCleanup,
+			startTeamInboxPoller,
+			scheduleTeammateWidgetRender,
+			startTimeoutSweeper: () => registry.startTimeoutSweeper(timeoutMs, 30_000, (agent) => {
 				const unassigned = teamManager.unassignOpenTasksForAgent(agent.id);
 				emitTeamCompletion({
 					id: agent.id,
 					agent: agent.agentType,
 					name: agent.name,
 					status: "timed_out",
-					summary: appendUnassignedTaskSummary(`Timed out after ${getCoordinatorSettings().workerTimeoutMs}ms`, unassigned),
+					summary: appendUnassignedTaskSummary(`Timed out after ${timeoutMs}ms`, unassigned),
 				});
-			});
+			}),
+		});
+	};
+
+	pi.on("session_start", (_event, ctx) => {
+		resetSessionState(ctx);
+		setCoordinatorMode(isLeadRuntime);
+		if (isLeadRuntime) {
+			startLeadSessionServices();
 		}
 	});
 	pi.on("session_switch", (_event, ctx) => {
@@ -688,11 +811,13 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		if (isLeadRuntime) {
 			teamManager.cleanupSessionTeams("Lead session switched");
 			clearLeaderTeamName(previousSessionId);
+			clearTeammateWidget();
+			stopTeamInboxPoller();
 		}
 		registry.dispose();
 		resetSessionState(ctx);
 		if (isLeadRuntime) {
-			teamManager.bootstrap();
+			startLeadSessionServices();
 		}
 	});
 	pi.on("session_branch", (_event, ctx) => {
@@ -700,11 +825,13 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		if (isLeadRuntime) {
 			teamManager.cleanupSessionTeams("Lead session branched");
 			clearLeaderTeamName(previousSessionId);
+			clearTeammateWidget();
+			stopTeamInboxPoller();
 		}
 		registry.dispose();
 		resetSessionState(ctx);
 		if (isLeadRuntime) {
-			teamManager.bootstrap();
+			startLeadSessionServices();
 		}
 	});
 	pi.on("session_shutdown", () => {
@@ -712,23 +839,15 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 		if (isLeadRuntime) {
 			teamManager.cleanupSessionTeams("Lead session shutdown");
 			clearLeaderTeamName(previousSessionId);
+			clearTeammateWidget();
+			stopTeamInboxPoller();
 		}
 		registry.dispose();
 		stopResultWatcher();
-		if (state.poller) clearInterval(state.poller);
-		state.poller = null;
-		for (const timer of state.cleanupTimers.values()) {
-			clearTimeout(timer);
-		}
-		state.cleanupTimers.clear();
-		state.asyncJobs.clear();
 		clearSlashSnapshots();
 		slashBridge.cancelAll();
 		slashBridge.dispose();
 		promptTemplateBridge.cancelAll();
 		promptTemplateBridge.dispose();
-		if (state.lastUiContext?.hasUI) {
-			state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
-		}
 	});
 }

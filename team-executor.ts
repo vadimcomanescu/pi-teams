@@ -20,7 +20,6 @@ import {
 	type SequentialStep,
 } from "./settings.js";
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
-import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async-execution.js";
 import { createForkContextResolver } from "./fork-context.js";
 import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.js";
 import {
@@ -89,8 +88,6 @@ interface ExecutorDeps {
 	pi: ExtensionAPI;
 	state: TeamState;
 	config: ExtensionConfig;
-	asyncByDefault: boolean;
-	tempArtifactsDir: string;
 	getTeamSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
 	discoverAgents: (cwd: string, scope: AgentScope) => { agents: AgentConfig[] };
@@ -111,13 +108,10 @@ interface ExecutionContextData {
 	agents: AgentConfig[];
 	runId: string;
 	shareEnabled: boolean;
-	sessionRoot: string;
 	sessionDirForIndex: (idx?: number) => string;
 	sessionFileForIndex: (idx?: number) => string | undefined;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
-	parallelDowngraded: boolean;
-	effectiveAsync: boolean;
 }
 
 function validateExecutionInput(
@@ -128,6 +122,19 @@ function validateExecutionInput(
 	hasSingle: boolean,
 	allowClarifyTaskPrompt: boolean,
 ): AgentToolResult<Details> | null {
+	if (params.async !== undefined) {
+		return {
+			content: [
+				{
+					type: "text",
+					text: "`async` execution is no longer supported. Use the first-class team lifecycle tools (team_create/spawn_teammate/check_teammate/team_shutdown/team_delete) for the supported team lifecycle behavior.",
+				},
+			],
+			isError: true,
+			details: { mode: getRequestedModeLabel(params), results: [] },
+		};
+	}
+
 	if (Number(hasChain) + Number(hasTasks) + Number(hasSingle) !== 1) {
 		return {
 			content: [
@@ -224,26 +231,6 @@ function toExecutionErrorResult(params: TeamParamsLike, error: unknown): AgentTo
 	);
 }
 
-function collectChainSessionFiles(
-	chain: ChainStep[],
-	sessionFileForIndex: (idx?: number) => string | undefined,
-): (string | undefined)[] {
-	const sessionFiles: (string | undefined)[] = [];
-	let flatIndex = 0;
-	for (const step of chain) {
-		if (isParallelStep(step)) {
-			for (let i = 0; i < step.parallel.length; i++) {
-				sessionFiles.push(sessionFileForIndex(flatIndex));
-				flatIndex++;
-			}
-			continue;
-		}
-		sessionFiles.push(sessionFileForIndex(flatIndex));
-		flatIndex++;
-	}
-	return sessionFiles;
-}
-
 function wrapChainTasksForFork(chain: ChainStep[], context: TeamParamsLike["context"]): ChainStep[] {
 	if (context !== "fork") return chain;
 	return chain.map((step, stepIndex) => {
@@ -308,6 +295,80 @@ function spawnCoordinatorWorker(
 
 	const workerId = runId;
 	const workerName = params.name;
+	let lastProgressSignature: string | null = null;
+	let lastProgressEmitAt = 0;
+	let teammateProgressTimer: ReturnType<typeof setTimeout> | null = null;
+	let pendingProgressPayload: {
+		summary?: string;
+		task?: string;
+		currentTool?: string;
+		recentOutput?: string[];
+		toolCount?: number;
+		tokens?: number;
+	} | null = null;
+	const TEAMMATE_PROGRESS_EVENT_MIN_INTERVAL_MS = 1000;
+
+	const emitTeammateProgress = (payload: {
+		summary?: string;
+		task?: string;
+		currentTool?: string;
+		recentOutput?: string[];
+		toolCount?: number;
+		tokens?: number;
+	}) => {
+		const signature = JSON.stringify({
+			summary: payload.summary ?? null,
+			task: payload.task ?? null,
+			currentTool: payload.currentTool ?? null,
+			recentOutput: payload.recentOutput?.slice(-3) ?? null,
+			toolCount: payload.toolCount ?? null,
+			tokens: payload.tokens ?? null,
+		});
+		if (signature === lastProgressSignature) return;
+		lastProgressSignature = signature;
+		lastProgressEmitAt = Date.now();
+		deps.pi.events.emit("team:teammate-progress", {
+			agentId: workerId,
+			agentType: params.agent,
+			name: workerName,
+			currentTool: payload.currentTool,
+			summary: payload.summary,
+			task: payload.task,
+			recentOutput: payload.recentOutput,
+			toolCount: payload.toolCount,
+			tokens: payload.tokens,
+		});
+	};
+
+	const scheduleTeammateProgressEmit = (payload: {
+		summary?: string;
+		task?: string;
+		currentTool?: string;
+		recentOutput?: string[];
+		toolCount?: number;
+		tokens?: number;
+	}) => {
+		pendingProgressPayload = payload;
+		const elapsed = Date.now() - lastProgressEmitAt;
+		if (elapsed >= TEAMMATE_PROGRESS_EVENT_MIN_INTERVAL_MS) {
+			if (teammateProgressTimer) {
+				clearTimeout(teammateProgressTimer);
+				teammateProgressTimer = null;
+			}
+			const readyPayload = pendingProgressPayload;
+			pendingProgressPayload = null;
+			if (readyPayload) emitTeammateProgress(readyPayload);
+			return;
+		}
+		if (teammateProgressTimer) return;
+		teammateProgressTimer = setTimeout(() => {
+			teammateProgressTimer = null;
+			const readyPayload = pendingProgressPayload;
+			pendingProgressPayload = null;
+			if (readyPayload) emitTeammateProgress(readyPayload);
+		}, TEAMMATE_PROGRESS_EVENT_MIN_INTERVAL_MS - elapsed);
+		teammateProgressTimer.unref?.();
+	};
 
 	// Validate name before spawning to avoid orphaned processes
 	if (workerName) {
@@ -344,12 +405,45 @@ function spawnCoordinatorWorker(
 		modelOverride,
 		skills: effectiveSkills,
 		extraEnv: getWorkerExtraEnv(params),
+		onUpdate: (update) => {
+			const step = update.details?.results[0];
+			const progress = step?.progress ?? update.details?.progress?.[0];
+			const recentOutput = progress?.recentOutput?.slice(-5) ?? step?.progress?.recentOutput?.slice(-5);
+			const latestOutput = recentOutput?.at(-1);
+			registry.patch(workerId, {
+				currentTool: progress?.currentTool,
+				recentOutput,
+				toolCount: progress?.toolCount,
+				tokens: progress?.tokens,
+				durationMs: progress?.durationMs,
+				lastUpdateAt: Date.now(),
+				result: latestOutput ?? step?.task,
+			});
+			if (params.runtimeRole === "teammate") {
+				scheduleTeammateProgressEmit({
+					summary: latestOutput,
+					task: step?.task,
+					currentTool: progress?.currentTool,
+					recentOutput,
+					toolCount: progress?.toolCount,
+					tokens: progress?.tokens,
+				});
+			}
+		},
 		onTeammateControlMessage: params.runtimeRole === "teammate"
 			? (message) => deps.onTeammateControlMessage?.({
 				agentId: workerId,
 				agentType: params.agent!,
 				name: workerName,
 				message,
+			})
+			: undefined,
+		onTeammateIdle: params.runtimeRole === "teammate"
+			? (summary) => deps.registry?.resolve(workerId) && deps.pi.events.emit("team:teammate-idle", {
+				agentId: workerId,
+				agentType: params.agent,
+				name: workerName,
+				summary,
 			})
 			: undefined,
 		onSpawn: (proc) => {
@@ -367,6 +461,7 @@ function spawnCoordinatorWorker(
 				runtimeRole: params.runtimeRole,
 				teamMetadata: params.teamMetadata,
 				sessionFile,
+				lastUpdateAt: Date.now(),
 			});
 		},
 	});
@@ -382,6 +477,11 @@ function spawnCoordinatorWorker(
 
 	// Handle completion in background
 	promise.then((result) => {
+		if (teammateProgressTimer) {
+			clearTimeout(teammateProgressTimer);
+			teammateProgressTimer = null;
+		}
+		pendingProgressPayload = null;
 		const output = getFinalOutput(result.messages);
 		const exitStatus = result.exitCode === 0 ? "completed" : "failed";
 		registry.patch(workerId, { sessionFile: result.sessionFile ?? sessionFile, model: modelOverride });
@@ -405,6 +505,11 @@ function spawnCoordinatorWorker(
 			},
 		});
 	}).catch(() => {
+		if (teammateProgressTimer) {
+			clearTimeout(teammateProgressTimer);
+			teammateProgressTimer = null;
+		}
+		pendingProgressPayload = null;
 		registry.updateStatus(workerId, "failed");
 		deps.pi.events.emit("team:complete", {
 			id: workerId,
@@ -425,85 +530,7 @@ function spawnCoordinatorWorker(
 	};
 }
 
-function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
-	const {
-		params,
-		agents,
-		ctx,
-		shareEnabled,
-		sessionRoot,
-		sessionFileForIndex,
-		artifactConfig,
-		artifactsDir,
-		effectiveAsync,
-	} = data;
-	const hasChain = (params.chain?.length ?? 0) > 0;
-	const hasSingle = Boolean(params.agent && params.task);
-	if (!effectiveAsync) return null;
-
-	if (!isAsyncAvailable()) {
-		return {
-			content: [{ type: "text", text: "Async mode requires jiti for TypeScript execution but it could not be found. Install globally: npm install -g jiti" }],
-			isError: true,
-			details: { mode: "single" as const, results: [] },
-		};
-	}
-	const id = randomUUID();
-	const asyncCtx = { pi: deps.pi, cwd: ctx.cwd, currentSessionId: deps.state.currentSessionId! };
-
-	if (hasChain && params.chain) {
-		const normalized = normalizeSkillInput(params.skill);
-		const chainSkills = normalized === false ? [] : (normalized ?? []);
-		const chain = wrapChainTasksForFork(params.chain as ChainStep[], params.context);
-		return executeAsyncChain(id, {
-			chain,
-			agents,
-			ctx: asyncCtx,
-			cwd: params.cwd,
-			maxOutput: params.maxOutput,
-			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-			artifactConfig,
-			shareEnabled,
-			sessionRoot,
-			chainSkills,
-			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForIndex),
-		});
-	}
-
-	if (hasSingle) {
-		const a = agents.find((x) => x.name === params.agent);
-		if (!a) {
-			return {
-				content: [{ type: "text", text: `Unknown agent: ${params.agent}` }],
-				isError: true,
-				details: { mode: "single" as const, results: [] },
-			};
-		}
-		const rawOutput = params.output !== undefined ? params.output : a.output;
-		const effectiveOutput: string | false | undefined = rawOutput === true ? a.output : (rawOutput as string | false | undefined);
-		const normalizedSkills = normalizeSkillInput(params.skill);
-		const skills = normalizedSkills === false ? [] : normalizedSkills;
-		return executeAsyncSingle(id, {
-			agent: params.agent!,
-			task: params.context === "fork" ? wrapForkTask(params.task!) : params.task!,
-			agentConfig: a,
-			ctx: asyncCtx,
-			cwd: params.cwd,
-			maxOutput: params.maxOutput,
-			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-			artifactConfig,
-			shareEnabled,
-			sessionRoot,
-			sessionFile: sessionFileForIndex(0),
-			skills,
-			output: effectiveOutput,
-		});
-	}
-
-	return null;
-}
-
-async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
+async function runChainPath(data: ExecutionContextData): Promise<AgentToolResult<Details>> {
 	const {
 		params,
 		agents,
@@ -516,7 +543,6 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		artifactsDir,
 		artifactConfig,
 		onUpdate,
-		sessionRoot,
 	} = data;
 	const normalized = normalizeSkillInput(params.skill);
 	const chainSkills = normalized === false ? [] : (normalized ?? []);
@@ -541,36 +567,10 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		chainDir: params.chainDir,
 	});
 
-	if (chainResult.requestedAsync) {
-		if (!isAsyncAvailable()) {
-			return {
-				content: [{ type: "text", text: "Background mode requires jiti for TypeScript execution but it could not be found." }],
-				isError: true,
-				details: { mode: "chain" as const, results: [] },
-			};
-		}
-		const id = randomUUID();
-		const asyncCtx = { pi: deps.pi, cwd: ctx.cwd, currentSessionId: deps.state.currentSessionId! };
-		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
-		return executeAsyncChain(id, {
-			chain: asyncChain,
-			agents,
-			ctx: asyncCtx,
-			cwd: params.cwd,
-			maxOutput: params.maxOutput,
-			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-			artifactConfig,
-			shareEnabled,
-			sessionRoot,
-			chainSkills: chainResult.requestedAsync.chainSkills,
-			sessionFilesByFlatIndex: collectChainSessionFiles(asyncChain, sessionFileForIndex),
-		});
-	}
-
 	return chainResult;
 }
 
-async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
+async function runParallelPath(data: ExecutionContextData): Promise<AgentToolResult<Details>> {
 	const {
 		params,
 		agents,
@@ -582,9 +582,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		shareEnabled,
 		artifactConfig,
 		artifactsDir,
-		parallelDowngraded,
 		onUpdate,
-		sessionRoot,
 	} = data;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
@@ -656,37 +654,6 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			if (override?.skills !== undefined) skillOverrides[i] = override.skills;
 		}
 
-		if (result.runInBackground) {
-			if (!isAsyncAvailable()) {
-				return {
-					content: [{ type: "text", text: "Background mode requires jiti for TypeScript execution but it could not be found." }],
-					isError: true,
-					details: { mode: "parallel" as const, results: [] },
-				};
-			}
-			const id = randomUUID();
-			const asyncCtx = { pi: deps.pi, cwd: ctx.cwd, currentSessionId: deps.state.currentSessionId! };
-			const parallelTasks = tasks.map((t, i) => ({
-				agent: t.agent,
-				task: params.context === "fork" ? wrapForkTask(taskTexts[i]!) : taskTexts[i]!,
-				cwd: t.cwd,
-				...(modelOverrides[i] ? { model: modelOverrides[i] } : {}),
-				...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
-			}));
-			return executeAsyncChain(id, {
-				chain: [{ parallel: parallelTasks }],
-				agents,
-				ctx: asyncCtx,
-				cwd: params.cwd,
-				maxOutput: params.maxOutput,
-				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-				artifactConfig,
-				shareEnabled,
-				sessionRoot,
-				chainSkills: [],
-				sessionFilesByFlatIndex: tasks.map((_, index) => sessionFileForIndex(index)),
-			});
-		}
 	}
 
 	const behaviors = agentConfigs.map((c) => resolveStepBehavior(c, {}));
@@ -746,7 +713,6 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 	}
 
 	const ok = results.filter((r) => r.exitCode === 0).length;
-	const downgradeNote = parallelDowngraded ? " (async not supported for parallel)" : "";
 	const aggregatedOutput = aggregateParallelOutputs(
 		results.map((r) => ({
 			agent: r.agent,
@@ -757,7 +723,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		(i, agent) => `=== Task ${i + 1}: ${agent} ===`,
 	);
 
-	const summary = `${ok}/${results.length} succeeded${downgradeNote}`;
+	const summary = `${ok}/${results.length} succeeded`;
 	const fullContent = `${summary}\n\n${aggregatedOutput}`;
 
 	return {
@@ -784,7 +750,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		artifactConfig,
 		artifactsDir,
 		onUpdate,
-		sessionRoot,
 	} = data;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
@@ -861,32 +826,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		if (override?.output !== undefined) effectiveOutput = override.output;
 		if (override?.skills !== undefined) skillOverride = override.skills;
 
-		if (result.runInBackground) {
-			if (!isAsyncAvailable()) {
-				return {
-					content: [{ type: "text", text: "Background mode requires jiti for TypeScript execution but it could not be found." }],
-					isError: true,
-					details: { mode: "single" as const, results: [] },
-				};
-			}
-			const id = randomUUID();
-			const asyncCtx = { pi: deps.pi, cwd: ctx.cwd, currentSessionId: deps.state.currentSessionId! };
-			return executeAsyncSingle(id, {
-				agent: params.agent!,
-				task: params.context === "fork" ? wrapForkTask(task) : task,
-				agentConfig,
-				ctx: asyncCtx,
-				cwd: params.cwd,
-				maxOutput: params.maxOutput,
-				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
-				artifactConfig,
-				shareEnabled,
-				sessionRoot,
-				sessionFile: sessionFileForIndex(0),
-				skills: skillOverride === false ? [] : skillOverride,
-				output: effectiveOutput,
-			});
-		}
 	}
 
 	if (params.context === "fork") {
@@ -1034,18 +973,11 @@ export function createTeamExecutor(deps: ExecutorDeps): {
 			return toExecutionErrorResult(params, error);
 		}
 
-		const requestedAsync = params.async ?? deps.asyncByDefault;
-		const parallelDowngraded = hasTasks && requestedAsync;
-		let effectiveAsync = false;
-		if (requestedAsync && !hasTasks) {
-			effectiveAsync = hasChain ? params.clarify === false : params.clarify !== true;
-		}
-
 		const artifactConfig: ArtifactConfig = {
 			...DEFAULT_ARTIFACT_CONFIG,
 			enabled: params.artifacts !== false,
 		};
-		const artifactsDir = effectiveAsync ? deps.tempArtifactsDir : getArtifactsDir(parentSessionFile);
+		const artifactsDir = getArtifactsDir(parentSessionFile);
 
 		let sessionRoot: string;
 		if (params.sessionDir) {
@@ -1080,25 +1012,19 @@ export function createTeamExecutor(deps: ExecutorDeps): {
 			agents,
 			runId,
 			shareEnabled,
-			sessionRoot,
 			sessionDirForIndex,
 			sessionFileForIndex,
 			artifactConfig,
 			artifactsDir,
-			parallelDowngraded,
-			effectiveAsync,
 		};
 
 		try {
-			const asyncResult = runAsyncPath(execData, deps);
-			if (asyncResult) return withForkContext(asyncResult, params.context);
-
 			if (hasChain && params.chain) {
-				return withForkContext(await runChainPath(execData, deps), params.context);
+				return withForkContext(await runChainPath(execData), params.context);
 			}
 
 			if (hasTasks && params.tasks) {
-				return withForkContext(await runParallelPath(execData, deps), params.context);
+				return withForkContext(await runParallelPath(execData), params.context);
 			}
 
 			if (hasSingle) {

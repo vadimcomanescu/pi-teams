@@ -2,13 +2,28 @@
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-04-13
+
 ### Added
-- Claude-style graceful shutdown messaging through `send_message`, with structured `shutdown_request` and `shutdown_response` payloads for teammate approve/reject flows.
+- Structured graceful shutdown messaging through `send_message`, with `shutdown_request` and `shutdown_response` payloads for teammate approve/reject flows.
 - New protocol coverage for graceful shutdown approval, rejection, and invalid response validation.
+- Explicit teammate idle/active lifecycle tracking, including persisted `isActive` state and `check_teammate` details for `is_active` and lifecycle continuation semantics.
+- `/team --detail <name>` teammate detail surface with mode/model/cwd context, owned task checklist, latest activity, availability text, and long-prompt preview handling.
+- `/team --detail <name> --full-prompt` support for expanding full teammate prompt or summary text.
+- Lead-session live teammate spinner widget with real-time task/tool/output context (non-interactive surface).
+- Startup orphan cleanup for stale `orphaned` team directories, with configurable retention via `orphanCleanupMaxAgeHours`.
+- New `TeamManager.cleanupOrphanedTeams(maxAgeMs)` cleanup primitive with failure-tolerant behavior.
+- Structured `send_message` mode updates via `mode_set_request` (`default|plan|execute`), with persisted teammate mode reflected in `check_teammate` and `/team` views.
+- Task dependency parity through `task_update.depends_on`, including persisted dependency fields, blocked-task enforcement, and blocked/dependency visibility in `task_list` and `task_read`.
 
 ### Changed
+- `/team` is now the single operator-facing inspection surface. Legacy `/workers`-style inspection is removed.
 - Plain-text `send_message` follow-ups now require a non-empty `summary`.
+- `team_shutdown` and `team_delete` are now documented and enforced as distinct steps: shutdown stops teammates and releases open work, delete performs final physical cleanup and is a successful no-op when no current team exists.
 - Approved teammate shutdowns now persist `stopped` status and task unassignment before late completion events can regress the recorded state.
+- Live teammates now flip between running and idle at turn boundaries, while shutdown and orphaned teams force teammates non-addressable.
+- `/team` roster and detail views now prefer recent activity over stale goal text, use humanized task rows, and show current availability without exposing internal routing syntax.
+- The live teammate widget now shares the same teammate surface-state derivation as `/team`, clears legacy async widget state, refreshes on a short cadence, and truncates cleanly on narrow terminals by dropping stats before activity text.
 
 ## [1.0.6] - 2026-04-11
 

@@ -146,8 +146,39 @@ describe("TeamManager", () => {
 
 		const teammate = teamManager.checkTeammate("review", "architecture");
 		assert.equal(teammate.teamName, "review");
+		assert.equal(teammate.mode, "default");
 		assert.equal(teammate.status, "running");
 		assert.equal(teammate.effectiveModel, "anthropic/claude-sonnet-4.6");
+	});
+
+	it("setTeammateModeForAgent updates persisted teammate mode", () => {
+		teamManager.createTeam({ team_name: "review" });
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			model: undefined,
+			status: "running",
+			cwd: tempDir,
+		});
+
+		teamManager.setTeammateModeForAgent("worker-1", "plan");
+		assert.equal(teamManager.checkTeammate("review", "docs").mode, "plan");
+	});
+
+	it("setTeammateModeForAgent rejects invalid mode updates", () => {
+		teamManager.createTeam({ team_name: "review" });
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			model: undefined,
+			status: "running",
+			cwd: tempDir,
+		});
+
+		assert.throws(() => teamManager.setTeammateModeForAgent("worker-1", "invalid"), /invalid teammate mode/i);
+		assert.equal(teamManager.checkTeammate("review", "docs").mode, "default");
 	});
 
 	it("rebinds a resumed teammate to the latest agent id by name", () => {
@@ -189,6 +220,25 @@ describe("TeamManager", () => {
 		const teammate = teamManager.checkTeammate("review", "docs");
 		assert.equal(teammate.member.agentId, "worker-2");
 		assert.equal(teammate.status, "running");
+	});
+
+	it("applies terminal status updates that arrive before teammate registration", () => {
+		teamManager.createTeam({ team_name: "review" });
+		teamManager.recordTeammateStatus("worker-1", "failed", "Spawn failed immediately");
+
+		teamManager.registerTeammate("review", {
+			name: "docs",
+			agentId: "worker-1",
+			agentType: "worker",
+			model: undefined,
+			status: "running",
+			cwd: tempDir,
+		});
+
+		const teammate = teamManager.checkTeammate("review", "docs");
+		assert.equal(teammate.status, "failed");
+		assert.equal(teammate.member.isActive, false);
+		assert.equal(teammate.lastSummary, "Spawn failed immediately");
 	});
 
 	it("rejects duplicate active named-agent names", () => {
